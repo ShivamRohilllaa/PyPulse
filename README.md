@@ -2,7 +2,7 @@
 
 **See which Python routes are slow, which ones fail, and how many queries each Django request costs.** PyPulse is a self-hosted Django application with a Python collector, scheduler and HTTP benchmark worker. The dashboard renders on the server and refreshes live reports in the browser.
 
-[Start here](#start-the-dashboard) · [Choose your framework](#connect-your-framework) · [Try the Django experiment](#try-the-django-experiment) · [Dashboard guide](docs/dashboard-guide.md)
+[Explore the product site ↗](https://shivamrohilllaa.github.io/PyPulse/) · [Start here](#start-the-dashboard) · [Choose your framework](#connect-your-framework) · [Try the Django experiment](#try-the-django-experiment) · [Dashboard guide](docs/dashboard-guide.md)
 
 [![Live Python route report with 30 requests, 3 errors and 90% availability](docs/screenshots/traffic.jpg)](docs/screenshots/traffic.jpg)
 

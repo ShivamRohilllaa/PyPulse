@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PyPulse — Python API monitoring and benchmarks</title>
+  <meta name="description" content="Self-hosted observability for Django, DRF, Flask and FastAPI. Inspect requests, measure latency and run reproducible benchmarks.">
+  <meta name="theme-color" content="#f6f7f2"><meta property="og:title" content="PyPulse — Your Python API under load">
+  <meta property="og:description" content="Explore a real Django run and connect your own API."><meta property="og:type" content="website">
+  <meta property="og:image" content="https://shivamrohilllaa.github.io/PyPulse/screenshots/traffic.jpg">
+  <link rel="icon" href="site/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="site/landing.css"><script src="site/landing.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><nav aria-label="Main" class="wrap"><a class="brand" href="#main"><img src="site/icon.svg" width="30" height="30" alt="">PyPulse</a><div class="navlinks"><a href="#reports">Reports</a><a href="#uses">Use cases</a><a href="#setup">Setup</a></div><a class="navrepo" href="https://github.com/ShivamRohilllaa/PyPulse">GitHub ↗</a></nav></header>
+<main id="main">
+<section class="hero wrap" aria-labelledby="hero-title">
+  <div class="hero-copy"><p class="kicker"><i></i> Python API observability</p><h1 id="hero-title">Your API,<br><span>under load.</span></h1><p class="lead">Find the slow route, count its queries, and see how it holds up under traffic. A self-hosted workspace for Python teams.</p><div class="actions"><a class="cta" href="#setup">Get started <span>→</span></a><a class="secondary" href="#reports">Explore a real run <span>↓</span></a></div><p class="frameworks">Django <b>·</b> DRF <b>·</b> Flask <b>·</b> FastAPI</p></div>
+  <figure class="terrain"><div class="fighead"><span class="stamp"><i></i> BENCHMARK CAPTURE</span><span>30 s</span></div><div class="plot"><img src="site/latency.svg" width="680" height="415" alt="Thirty ridges of measured response times from a real Django order lookup."></div><figcaption><div><span>Latency distribution</span><small>One ridge per second</small></div><div class="measure">8.62 <small>ms p95</small></div></figcaption></figure>
+</section>
+<section class="reports wrap" id="reports"><header class="sectionhead"><div><p class="kicker">Inside the workspace</p><h2>Two views of a request.</h2></div><p>The agent records what the app handled. The benchmark worker times what a client experienced.</p></header>
+<div class="showcase"><div class="showcopy"><div class="switch" aria-label="Select a report"><button type="button" data-report="traffic" aria-pressed="true">Traffic</button><button type="button" data-report="benchmark" aria-pressed="false">Benchmark</button></div>
+<div id="report-description"><h3>Find the failing route.</h3><p>Thirty requests hit a Django orders app. Six were deliberately slow. Three failed. Route-level counts show exactly which view returned each error.</p></div>
+<a id="full-image" class="textlink" href="screenshots/traffic.jpg">Open full screenshot ↗</a></div>
+<div class="screen"><a id="screen-link" href="screenshots/traffic.jpg"><img id="screen-img" src="screenshots/traffic.jpg" width="1280" height="1220" loading="lazy" alt="Django traffic report showing 30 requests and three intentional errors."></a></div></div>
+</section>
+<section class="uses" id="uses"><div class="wrap usegrid"><header><p class="kicker">Use cases</p><h2>Where to look<br>when things slow down.</h2><p>Follow an endpoint from its first SQL query to its next release.</p></header>
+<div class="use-list"><details open><summary>Diagnose a Django endpoint <span>＋</span></summary><p>Open Traffic and compare the SQL-per-request and p95 columns. When the same view grows from one query to twenty, inspect how it fetches related objects.</p></details><details><summary>Compare two releases <span>＋</span></summary><p>Run the same saved benchmark on staging before and after a change. Compare throughput, p95 and errors side by side, or download individual timings as CSV.</p></details><details><summary>Catch a failing dependency <span>＋</span></summary><p>Monitor an endpoint with an expected status and response text. Consecutive failed checks open an incident. A passing check records recovery. Publish selected monitors on a read-only status page.</p></details><details><summary>Set a performance gate in CI <span>＋</span></summary><p>Give the saved benchmark a p95 limit and an error-rate threshold. Queue it with a CI token, then read the final pass result before shipping.</p></details></div>
+</div></section>
+<section class="setup wrap" id="setup"><header class="sectionhead"><div><p class="kicker">Quick start</p><h2>Connect your first API.</h2></div><p>Start the dashboard, create a service token, then add the adapter to your app.</p></header>
+<div class="setupgrid"><article><h3>Start the workspace</h3><p>From a terminal with Docker Compose installed:</p><div class="codebox"><button type="button" class="copy" data-copy="install">Copy</button><pre id="install"><code>git clone https://github.com/ShivamRohilllaa/PyPulse.git
+cd PyPulse
+docker compose up -d --build
+docker compose exec web python manage.py createsuperuser</code></pre></div><p>Sign in at <code>localhost:8080</code>, then choose <strong>Connect service</strong>.</p></article>
+<article><h3>Instrument your app</h3><label class="picker" for="framework">Framework <select id="framework"><option>Django</option><option>DRF</option><option>Flask</option><option>FastAPI</option></select></label><div class="codebox"><button type="button" class="copy" data-copy="snippet">Copy</button><pre id="snippet"><code>MIDDLEWARE = [
+    "pypulse_agent.django.middleware",
+    *MIDDLEWARE,
+]</code></pre></div><p id="install-note">Install the agent into your app environment, set its URL and token, then add this line after your existing Django middleware definition.</p><a class="textlink" href="https://github.com/ShivamRohilllaa/PyPulse#connect-your-framework">Full framework instructions ↗</a></article></div>
+</section>
+<section class="closing wrap"><div><p class="kicker">Build notes</p><h2>What 30 Django requests<br>told me about my API.</h2></div><a class="cta light" href="https://buildmeai.co/blog/pypulse-monitor-python-apis">Read the experiment ↗</a></section></main>
+<footer><div class="wrap foot"><a class="brand" href="#main"><img src="site/icon.svg" width="25" height="25" alt="">PyPulse</a><span>Built by Shivam Rohilla</span><a href="https://github.com/ShivamRohilllaa/PyPulse/blob/main/LICENSE">MIT license</a><a href="https://github.com/ShivamRohilllaa/PyPulse/blob/main/docs/dashboard-guide.md">Documentation ↗</a></div></footer>
+</body></html>
