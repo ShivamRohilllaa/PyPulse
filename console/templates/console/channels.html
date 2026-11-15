@@ -1,0 +1,8 @@
+{% extends 'console/base.html' %}{% block content %}
+<header class="page-head"><div><p class="eyebrow"><a href="{% url 'incidents' %}">Incidents</a></p><h1>Alert channels</h1></div>{% if perms.console.add_alertchannel %}<a class="button primary" href="{% url 'new_channel' %}">＋ Add channel</a>{% endif %}</header>
+<section class="panel"><h2>Destinations</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Transport</th><th>Routing</th><th>State</th><th>Actions</th></tr></thead><tbody>
+{% for c in channels %}<tr><td>{{ c.name }}</td><td>{{ c.get_kind_display }}</td><td>{% if c.escalation_only %}Escalations{% else %}Standard alerts{% endif %}</td><td>{{ c.enabled|yesno:"Enabled,Disabled" }}</td>
+<td><div class="actions">{% if perms.console.change_alertchannel %}<a class="button" href="{% url 'edit_channel' c.pk %}">Edit</a><form method="post" action="{% url 'channel_action' c.pk 'test' %}">{% csrf_token %}<button {% if not c.enabled %}disabled{% endif %}>Send test</button></form>{% endif %}
+{% if perms.console.delete_alertchannel %}<form data-confirm="Remove this channel and its delivery history?" method="post" action="{% url 'channel_action' c.pk 'delete' %}">{% csrf_token %}<button>Delete</button></form>{% endif %}</div></td></tr>{% empty %}<tr><td colspan="5">Add a destination to receive alerts.</td></tr>{% endfor %}</tbody></table></div></section>
+<div data-live="uptime">{% include 'console/channel_deliveries.html' %}</div>
+{% endblock %}

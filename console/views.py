@@ -4,6 +4,8 @@ from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, permission_required
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.paginator import Paginator
+from django.db.models import Q
 from django.db import IntegrityError, transaction
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -71,37 +73,53 @@ def rotate(request,pk):
     log_action(request,"Rotated token for "+service.name)
     return render(request,"console/token.html",{"service":service,"token":token,"section":"Traffic"})
 
+@login_required
+@require_http_methods(["GET","POST"])
+def edit_target(request, pk):
+    can_write(request, "change_service")
+    service = get_object_or_404(Service, pk=pk)
+    from django import forms
+    class TargetForm(forms.Form):
+        target = forms.FloatField(min_value=1, max_value=99.999, label="Availability target (%)")
+    form = TargetForm(request.POST if request.method == "POST" else None, initial={"target": service.target})
+    if request.method == "POST" and form.is_valid():
+        with transaction.atomic():
+            service.target = form.cleaned_data["target"]
+            service.save(update_fields=["target"])
+            log_action(request, "Updated availability target for " + service.name)
+        return redirect(f"/?service={service.pk}")
+    return render(request, "console/form.html", {"section": "Traffic", "form": form,
+                  "title": f"Availability target for {service.name}", "button": "Save target"})
+
+
 def api_report(request,pk):
     if not request.user.is_authenticated:
         return JsonResponse({"error":"Sign in"},status=401)
     service=get_object_or_404(Service,pk=pk)
     return JsonResponse({"service":summary(service),**report(service,window(request))})
 
-@login_required
-def monitoring(request):
-    return render(request,"console/monitors.html",{"section":"Uptime","monitors":Monitor.objects.order_by("name")})
+from .uptime_views import acknowledge, incidents, monitoring, monitor_detail, status
 
 @login_required
-def monitor_detail(request,pk):
-    monitor=get_object_or_404(Monitor,pk=pk)
-    return render(request,"console/monitor.html",{"section":"Uptime","monitor":monitor,"checks":monitor.checks.order_by("-at")[:80]})
-
-@login_required
-def configure(request,kind,pk=None):
+def configure(request,kind,pk=None,pattern=None):
     forms={"monitor":(Monitor,MonitorForm,"Uptime"),"test":(Exercise,ExerciseForm,"Benchmarks")}
     model,form_class,section=forms[kind]
     can_write(request,("change_" if pk else "add_")+model._meta.model_name)
     item=get_object_or_404(model,pk=pk) if pk else None
-    form=form_class(request.POST or None,instance=item)
+    form=form_class(request.POST if request.method == "POST" else None, request.FILES or None, instance=item, initial={"pattern":pattern} if pattern else None)
     if request.method=="POST" and form.is_valid():
         obj=form.save(commit=False)
         if kind=="test":
-            obj.next_at=timezone.now()+timedelta(minutes=obj.repeat_minutes) if obj.repeat_minutes else None
-        obj.save()
-        log_action(request,"Saved "+kind+" "+obj.name)
+            from .benchconfig import next_schedule
+            obj.next_at=next_schedule(obj, timezone.now())
+        with transaction.atomic():
+            obj.save()
+            form.save_m2m()
+            log_action(request,"Saved "+kind+" "+obj.name)
         return redirect("benchmarks" if kind=="test" else "monitors")
     title=("Edit " if pk else "New ")+("benchmark" if kind=="test" else "monitor")
-    return render(request,"console/form.html",{"title":title,"section":section,"form":form,"button":"Save"})
+    template="console/bench_form.html" if kind=="test" else "console/form.html"
+    return render(request,template,{"title":title,"section":section,"form":form,"button":"Save"})
 
 @login_required
 @require_POST
@@ -115,26 +133,8 @@ def check_now(request,pk):
     return redirect("monitor",pk=pk)
 
 @login_required
-def incidents(request):
-    return render(request,"console/incidents.html",{"section":"Incidents","items":Incident.objects.select_related("monitor").order_by("-opened")[:100]})
-
-@login_required
-@require_POST
-def acknowledge(request,pk):
-    can_write(request,"change_incident")
-    item=get_object_or_404(Incident,pk=pk)
-    item.acknowledged=True
-    item.save(update_fields=["acknowledged"])
-    log_action(request,"Acknowledged incident "+str(pk))
-    return redirect("incidents")
-
-def status(request):
-    monitors=Monitor.objects.filter(public=True,paused=False).order_by("name")
-    return render(request,"console/status.html",{"monitors":monitors})
-
-@login_required
 def benchmarks(request):
-    return render(request,"console/benchmarks.html",{"section":"Benchmarks","tests":Exercise.objects.order_by("name"),"runs":Run.objects.select_related("exercise").order_by("-id")[:60]})
+    return render(request,"console/benchmarks.html",{"section":"Benchmarks","tests":Exercise.objects.order_by("name"),"runs":Run.objects.select_related("exercise").defer("config","series","samples").order_by("-id")[:60]})
 
 @login_required
 @require_POST
@@ -165,25 +165,39 @@ def stop(request,pk):
 
 @login_required
 def run_detail(request,pk):
-    item=get_object_or_404(Run,pk=pk)
+    item=get_object_or_404(Run.objects.select_related("exercise"),pk=pk)
     other=request.GET.get("compare","")
-    previous=Run.objects.filter(pk=int(other),exercise=item.exercise).exclude(pk=pk).first() if other.isdecimal() else None
+    previous=Run.objects.filter(pk=int(other),exercise=item.exercise).exclude(pk=pk).only("pk","result").first() if other.isascii() and other.isdecimal() and len(other)<19 else None
+    timeline=Paginator(item.samples,40).get_page(request.GET.get("page") or 1)
     template="console/run_metrics.html" if request.GET.get("partial") else "console/run.html"
     return render(request,template,{"section":"Benchmarks","run":item,"m":item.result,"previous":previous,
-        "history":Run.objects.filter(exercise=item.exercise,finished__isnull=False).exclude(pk=pk).order_by("-pk")[:20]})
+        "timeline":timeline,"history":Run.objects.filter(exercise=item.exercise,finished__isnull=False).exclude(pk=pk).only("pk","started").order_by("-pk")[:20]})
 
 @login_required
 def export(request,pk):
-    item=get_object_or_404(Run,pk=pk)
+    from .benchconfig import PHASES
+    from .benchstats import reason
+    item=get_object_or_404(Run.objects.only("samples"),pk=pk)
     response=HttpResponse(content_type="text/csv",headers={"Content-Disposition":f'attachment; filename="pypulse-run-{pk}.csv"'})
     writer=csv.writer(response)
-    writer.writerow(["offset_seconds","elapsed_ms","http_status"])
-    writer.writerows(item.samples)
+    writer.writerow(["offset_seconds","elapsed_ms","http_status","step","profile","failure",*PHASES,"bytes_sent","bytes_received"])
+    def cell(text):
+        # Neutralize spreadsheet formula prefixes in operator-chosen labels.
+        return "'"+text if isinstance(text,str) and text.lstrip().startswith(("=","+","-","@")) else text
+    for row in item.samples:
+        phases=row[6] if len(row)>6 else {}
+        writer.writerow([*row[:3],*map(cell,row[3:5] if len(row)>4 else ["Endpoint","Direct"]),cell(reason(row)),
+            *(phases.get(k,"") for k in PHASES),*(row[7:9] or ["",""])])
     return response
 
 @login_required
 def activity(request):
-    return render(request,"console/activity.html",{"section":"Activity","rows":Audit.objects.order_by("-at")[:100]})
+    query = request.GET.get("q", "").strip()[:120]
+    events = Audit.objects.order_by("-at", "-pk")
+    if query:
+        events = events.filter(Q(actor__icontains=query) | Q(action__icontains=query))
+    rows = Paginator(events, 50).get_page(request.GET.get("page"))
+    return render(request, "console/activity.html", {"section": "Activity", "rows": rows, "q": query})
 
 def health(request):
     return JsonResponse({"status":"ok"})

@@ -1,6 +1,7 @@
 """One-time local import for the initial PyPulse SQLite workspace."""
 from datetime import datetime,timezone
 import csv
+import hashlib
 import gzip
 import json
 from pathlib import Path
@@ -9,7 +10,8 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand,CommandError
 from django.db import transaction
-from console.models import Batch, Service, Slice, Run, Exercise
+from console.models import Audit, Batch, Service, Slice, Run, Exercise
+from console.workspace_roles import apply_role
 
 def date(ms):
     return datetime.fromtimestamp(ms/1000,timezone.utc) if ms else None
@@ -21,14 +23,25 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self,source,**kwargs):
         User=get_user_model()
-        if User.objects.exists() or Service.objects.exists() or Exercise.objects.exists():
-            raise CommandError("Import into an empty, migrated workspace.")
         db=sqlite3.connect(source.resolve().as_uri()+"?mode=ro",uri=True)
         db.row_factory=sqlite3.Row
         try:
+            db.execute("BEGIN")
+            # Fingerprint a consistent logical snapshot, including rows still in the WAL.
+            signature = hashlib.sha256()
+            for statement in db.iterdump():
+                signature.update(statement.encode("utf-8"))
+                signature.update(b"\n")
+            marker = "Legacy SQLite import " + signature.hexdigest()
+            if Audit.objects.filter(actor="Migration", action=marker).exists():
+                self.stdout.write("This workspace snapshot was already imported.")
+                return
+            if User.objects.exists() or Service.objects.exists() or Exercise.objects.exists():
+                raise CommandError("Import into an empty, migrated workspace.")
             for u in db.execute("SELECT * FROM users"):
-                User.objects.create(username=u["email"],email=u["email"],first_name=u["name"] or "",is_active=not u["disabled"],
-                    is_staff=u["role"]=="admin",is_superuser=u["role"]=="admin",password="bcrypt$"+u["password_hash"])
+                user = User(username=u["email"],email=u["email"],first_name=u["name"] or "",password="bcrypt$"+u["password_hash"])
+                role = u["role"] if u["role"] in ("admin", "editor") else "viewer"
+                apply_role(user, role, not u["disabled"])
             for s in db.execute("SELECT * FROM python_services"):
                 Service.objects.create(pk=s["id"],name=s["name"],framework=s["framework"],target=s["target"],
                     token_hash=s["token_hash"],last_seen=date(s["last_seen"]))
@@ -58,6 +71,7 @@ class Command(BaseCommand):
                 Run.objects.create(pk=r["id"],exercise=ex,state="Completed",started=date(r["started_at"]),finished=date(r["finished_at"]),
                     config={"url":ex.url,"pattern":"fixed","rate":ex.rate,"seconds":ex.seconds,"max_p95":0,"max_error_pct":0},
                     result=result,series=series,samples=samples)
+            Audit.objects.create(actor="Migration", action=marker)
         finally:
             db.close()
         self.stdout.write("Imported accounts, connected services, route aggregates and supported runs.")

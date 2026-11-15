@@ -17,3 +17,17 @@ jobs:
       - run: python manage.py check
       - run: python manage.py test console
       - run: python -m pytest -q python/tests
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build
+      - name: Verify dashboard, worker, and TLS configuration
+        run: |
+          curl -fsS --retry 15 --retry-delay 2 --retry-connrefused http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/static/console/theme.js >/dev/null
+          docker compose exec -T worker python manage.py check
+          PYPULSE_DOMAIN=dashboard.example.org docker compose -f compose.yaml -f compose.https.yaml config --quiet
+          docker run --rm -e PYPULSE_DOMAIN=dashboard.example.org -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+      - if: always()
+        run: docker compose down -v

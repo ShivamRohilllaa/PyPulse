@@ -5,3 +5,6 @@ data
 **/__pycache__
 **/*.egg-info
 docs/screenshots
+**/dist
+**/build
+**/node_modules

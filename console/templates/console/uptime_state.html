@@ -1,0 +1,1 @@
+<span class="uptime-state" data-state="{% if monitor.paused %}Paused{% elif monitor.maintenance_active %}Maintenance{% else %}{{ monitor.state }}{% endif %}">{% if monitor.paused %}Paused{% elif monitor.maintenance_active %}Scheduled maintenance{% else %}{{ monitor.state }}{% endif %}</span>

@@ -1,0 +1,14 @@
+{% extends 'console/base.html' %}{% block content %}
+<header class="page-head"><div><p class="eyebrow"><a href="/workspace/">Workspace</a></p><h1>{{ section }}</h1></div>
+{% if kind == 'networks' and perms.console.add_networkprofile or kind == 'variables' and perms.console.add_variable %}<a class="button primary" href="new/">New {{ singular }}</a>{% endif %}</header>
+{% if kind == 'networks' %}
+<p class="muted">Apply a profile to see how a slower connection changes checks and benchmarks. Rate 0 means unlimited.</p>
+<div class="panel table-wrap"><table><thead><tr><th>Name</th><th>Down / up (kbit/s)</th><th>Delay ± jitter</th><th>Request loss</th><th>Actions</th></tr></thead><tbody>
+{% for p in rows %}<tr><td>{{ p.name }}</td><td>{{ p.download_kbps }} / {{ p.upload_kbps }}</td><td>{{ p.latency_ms }} ± {{ p.jitter_ms }} ms</td><td>{{ p.loss_pct|floatformat:"-2" }}%</td><td>{% if p.preset %}<span class="muted">Preset</span>{% else %}<div class="actions">{% if perms.console.change_networkprofile %}<a href="{% url 'networks_edit' p.pk %}">Edit</a>{% endif %}{% if perms.console.delete_networkprofile %}<form method="post" action="{% url 'networks_delete' p.pk %}" data-confirm="Remove this custom profile?">{% csrf_token %}<button>Remove</button></form>{% endif %}</div>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}
+<p class="muted">Reuse a value across checks and test steps. An environment-specific value takes precedence over a global one with the same name.</p>
+<div class="panel table-wrap"><table><thead><tr><th>Name</th><th>Environment</th><th>Value</th><th>Actions</th></tr></thead><tbody>
+{% for row in rows %}<tr><td><code>{{ row.item.name }}</code></td><td>{{ row.item.environment|default:"Global" }}</td><td><code>{{ row.display }}</code></td><td><div class="actions">{% if perms.console.change_variable %}<a href="{% url 'variables_edit' row.item.pk %}">Edit</a>{% endif %}{% if perms.console.delete_variable %}<form method="post" action="{% url 'variables_delete' row.item.pk %}" data-confirm="Remove this variable?">{% csrf_token %}<button>Remove</button></form>{% endif %}</div></td></tr>{% empty %}<tr><td colspan="4">No variables yet.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}{% endblock %}

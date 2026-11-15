@@ -1,0 +1,6 @@
+{% extends "console/base.html" %}{% load static %}{% block content %}
+<link rel="stylesheet" href="{% static 'console/workspace.css' %}">
+<header class="page-head"><div><p class="eyebrow"><a href="{% url 'workspace' %}">Workspace</a></p><h1>{% block heading %}{% endblock %}</h1></div></header>
+{% if error %}<p class="notice bad" role="alert">{{ error }}</p>{% endif %}
+{% block body %}{% endblock %}
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends 'console/base.html' %}{% load static %}{% block content %}
+<link rel="stylesheet" href="{% static 'console/bench_editor.css' %}"><script defer src="{% static 'console/bench_editor.js' %}"></script>
+<header class="page-head"><div><p class="eyebrow">Performance lab</p><h1>{{ title }}</h1><p class="muted">Choose a target, then define the traffic it should handle.</p></div><a href="{% url 'benchmarks' %}">All benchmarks</a></header>
+<form method="post" enctype="multipart/form-data" class="fields">{% csrf_token %}{{ form.non_field_errors }}
+{% for group in form.groups %}<section class="panel"><details {% if group.open or form.errors %}open{% endif %}><summary><b>{{ group.title }}</b></summary><p class="muted">{{ group.description }}</p>
+{% for field in group.fields %}<p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<small class="muted">{{ field.help_text }}</small>{% endif %}</p>{% endfor %}
+{% if group.example %}<details><summary>See a two-step scenario</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{% verbatim %}[
+  {"name":"Find order","url":"http://127.0.0.1:8000/orders/{{order}}",
+   "extract":{"item":"json:item.id"}},
+  {"name":"Get item","url":"http://127.0.0.1:8000/items/{{item}}"}
+]{% endverbatim %}</pre><p>Use a CSV headed <code>order</code>, with one order ID per line.</p></details>{% endif %}</details></section>{% endfor %}
+<button class="primary">{{ button }} benchmark</button></form>{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "console/workspace_page.html" %}{% block heading %}Members{% endblock %}{% block body %}
+<section class="panel"><h2>Workspace access</h2>
+{% for member,role in members %}<form class="ws-member" method="post" action="{% url 'workspace-update-member' member.pk %}">{% csrf_token %}
+<div class="ws-identity"><strong>{{ member.username }}</strong><small class="muted">{% if member.last_login %}Last sign-in <time datetime="{{ member.last_login|date:'c' }}">{{ member.last_login|date:"Y-m-d H:i T" }}</time>{% else %}Hasn’t signed in{% endif %}</small></div><label>Role <select name="role">{% for k,v in roles %}<option value="{{ k }}" {% if k == role %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+<label class="ws-choice"><input type="checkbox" name="active" {% if member.is_active %}checked{% endif %}> Active</label><button>Save</button><a href="{% url 'admin:auth_user_password_change' member.pk %}" aria-label="Reset password for {{ member.username }}">Reset password</a></form>{% endfor %}
+</section>
+<details class="panel fields" {% if form.errors %}open{% endif %}><summary>Create member</summary><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary">Create member</button></form></details>
+{% endblock %}

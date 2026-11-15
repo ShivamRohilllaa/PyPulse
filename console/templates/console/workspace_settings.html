@@ -1,0 +1,14 @@
+{% extends "console/workspace_page.html" %}{% block heading %}Workspace settings{% endblock %}{% block body %}
+<form method="post" class="ws-form">{% csrf_token %}{{ form.non_field_errors }}
+<section class="panel"><h2>New monitor defaults</h2><div class="ws-pair">
+{% include "console/workspace_field.html" with field=form.interval %}{% include "console/workspace_field.html" with field=form.timeout_ms %}
+{% include "console/workspace_field.html" with field=form.failure_threshold %}{% include "console/workspace_field.html" with field=form.warn_ms %}
+</div></section>
+<section class="panel"><h2>History retention</h2><div class="ws-pair">
+{% include "console/workspace_field.html" with field=form.raw_days %}{% include "console/workspace_field.html" with field=form.rollup_days %}
+{% include "console/workspace_field.html" with field=form.run_days %}{% include "console/workspace_field.html" with field=form.telemetry_days %}
+</div></section>
+<section class="panel"><h2>Benchmark targets</h2>{% include "console/workspace_field.html" with field=form.allowed_hosts %}</section>
+<section class="panel"><h2>Public status</h2>{% include "console/workspace_field.html" with field=form.status_title %}<label class="ws-choice">{{ form.status_enabled }} {{ form.status_enabled.label }}</label></section>
+<button class="primary">Save settings</button></form>
+{% endblock %}

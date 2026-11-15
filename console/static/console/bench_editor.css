@@ -1,0 +1,10 @@
+.scenario-editor{margin:1.25rem 0}.scenario-editor h3{margin:.3rem 0}
+.scenario-step{min-width:0;margin:.8rem 0;padding:clamp(.8rem,2vw,1.15rem);border:1px solid var(--line);border-radius:.85rem;background:#14201e44}
+.scenario-step legend{padding:0 .4rem;font-size:.84rem;letter-spacing:.02em;color:var(--accent);font-weight:650}
+.scenario-step label{display:grid;gap:.25rem;margin:.3rem 0 .6rem;color:var(--muted);font-size:.86rem}
+.scenario-step :is(input,select,textarea){width:100%;color:var(--ink)}.scenario-step summary{margin:.5rem 0;font-size:.9rem}
+.scenario-step button:disabled{opacity:.45;cursor:default}.scenario-step .actions{margin-top:1rem;flex-wrap:wrap}
+.step-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:.6rem}
+.step-extract{margin-top:1rem}.step-extract>b{display:block;font-size:.88rem;margin:.5rem 0}
+.extract-row{padding:.5rem 0;border-top:1px solid var(--line)}.extract-row button{grid-column:1/-1;justify-self:start}
+@media(max-width:600px){.step-grid{grid-template-columns:1fr;gap:0}}

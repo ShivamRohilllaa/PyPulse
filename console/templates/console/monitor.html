@@ -1,1 +1,17 @@
-{% extends 'console/base.html' %}{% block content %}<header class="page-head"><div><p class="eyebrow">Uptime · {{ monitor.state }}</p><h1>{{ monitor.name }}</h1><p>{{ monitor.url }}</p></div>{% if perms.console.change_monitor %}<div class="actions"><a class="button" href="{% url 'edit_monitor' monitor.pk %}">Edit monitor</a><form method="post" action="{% url 'check' monitor.pk %}">{% csrf_token %}<button class="primary">Check now</button></form></div>{% endif %}</header><section class="panel"><h2>Recent checks</h2><table><tr><th>Time (UTC)</th><th>HTTP</th><th>Duration</th><th>Result</th></tr>{% for c in checks %}<tr><td>{{ c.at|date:"M d H:i:s" }}</td><td>{{ c.status|default:"—" }}</td><td>{{ c.ms|floatformat:1 }} ms</td><td>{{ c.ok|yesno:"Passed,Failed" }}</td></tr>{% empty %}<tr><td colspan="4">Waiting for the worker.</td></tr>{% endfor %}</table></section>{% endblock %}
+{% extends 'console/base.html' %}{% load static %}
+{% block head %}<link rel="stylesheet" href="{% static 'console/uptime.css' %}">{% endblock %}
+{% block content %}
+<header class="page-head"><div><p class="eyebrow"><a href="{% url 'monitors' %}">Uptime</a>{% if monitor.group %} · {{ monitor.group }}{% endif %}</p><h1>{{ monitor.name }}</h1><p class="muted">{{ monitor.method }} · {{ endpoint }}</p></div>
+<div class="actions">
+{% if perms.console.change_monitor %}<a class="button" href="{% url 'edit_monitor' monitor.pk %}">Edit</a>
+{% if monitor.paused %}<form method="post" action="{% url 'monitor_action' monitor.pk 'resume' %}">{% csrf_token %}<button class="primary">Resume</button></form>
+{% else %}<form method="post" action="{% url 'monitor_action' monitor.pk 'pause' %}">{% csrf_token %}<button>Pause</button></form>
+<form method="post" action="{% url 'check' monitor.pk %}">{% csrf_token %}<button class="primary">Check now</button></form>{% endif %}{% endif %}
+{% if perms.console.add_monitor %}<form method="post" action="{% url 'monitor_action' monitor.pk 'clone' %}">{% csrf_token %}<button>Clone</button></form>{% endif %}
+{% if perms.console.delete_monitor %}<form method="post" action="{% url 'monitor_action' monitor.pk 'delete' %}" data-confirm="Delete this monitor, its history and incidents?">{% csrf_token %}<button>Delete</button></form>{% endif %}</div></header>
+<div class="toolbar"><span>Check history</span><nav class="seg" aria-label="History range">{% for r in periods %}<a href="?range={{ r }}" {% if r == period %}aria-current="true"{% endif %}>{{ r }}</a>{% endfor %}</nav></div>
+<div data-live="uptime">{% include 'console/uptime_measurements.html' %}</div>
+<section class="panel"><div class="panel-head"><h2>Maintenance windows</h2><a href="{% url 'maintenance' %}">All windows</a></div>
+{% for w in windows %}<div class="toolbar"><span>{% if w.name %}{{ w.name }} · {% endif %}{{ w.start|date:"M d, Y H:i" }} – {{ w.end|date:"M d, Y H:i" }} UTC · {{ w.get_recurrence_display }}</span>{% if perms.console.delete_maintenance and w.monitor_id == monitor.pk %}<form method="post" action="{% url 'delete_window' monitor.pk w.pk %}">{% csrf_token %}<button>Remove window</button></form>{% endif %}</div>{% empty %}<p class="muted">No scheduled maintenance.</p>{% endfor %}
+{% if perms.console.add_maintenance %}<details><summary>Schedule maintenance</summary><form class="fields" method="post" action="{% url 'add_window' monitor.pk %}">{% csrf_token %}{{ maintenance_form.as_p }}<button>Save window</button></form></details>{% endif %}</section>
+{% endblock %}

@@ -1,0 +1,35 @@
+.uptime-state {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.uptime-state::before {
+  content: "";
+  width: .48rem;
+  height: .48rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.uptime-state[data-state="Up"] { color: var(--accent); }
+.uptime-state[data-state="Slow"] { color: #f3cb82; }
+.uptime-state[data-state="Down"] { color: var(--coral); }
+[data-theme="light"] .uptime-state[data-state="Slow"] { color: #7b5211; }
+.uptime-summary strong { font-variant-numeric: tabular-nums; }
+.uptime-filters { justify-content: flex-start; gap: 1rem; }
+.uptime-filters label { display: inline-flex; align-items: center; gap: .45rem; }
+@media(max-width: 600px) {
+  .uptime-filters { gap: .6rem; }
+  .uptime-filters label { display: grid; flex: 1 1 8rem; gap: .25rem; }
+  .uptime-filters select { min-width: 0; }
+}
+.stats strong > .uptime-state { font: inherit; }
+
+.maintenance-field { display: grid; gap: .4rem; margin: 1rem 0; }
+.maintenance-field fieldset { margin: 0; padding: .7rem 1rem; border: 1px solid var(--line); border-radius: .6rem; }
+.maintenance-field fieldset label { display: inline-flex; align-items: center; gap: .5rem; }
+.uptime-filters input[type="search"] { min-width: 0; width: 11rem; }
+.uptime-state[data-state="Active"] { color: var(--accent); }
+@media(max-width:600px){.uptime-filters input[type="search"] { width:100%; }}

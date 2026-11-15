@@ -1,15 +1,12 @@
 import json
-import os
-import secrets
 from functools import wraps
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.cache import never_cache
-from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
-from .engine import enqueue
+from .workspace_ci import ci
 from .forms import ServiceForm
-from .models import Audit, Exercise, Run, Service
+from .models import Audit, Service
 from .telemetry import digest, issue_token, summary
 
 
@@ -74,19 +71,3 @@ def rotate(request,pk):
 def remove(request,pk):
     get_object_or_404(Service,pk=pk).delete()
     return JsonResponse({"deleted":True})
-
-@csrf_exempt
-@require_http_methods(["GET","POST"])
-def ci(request,pk=None):
-    key=os.environ.get("PYPULSE_CI_TOKEN")
-    if not key or not secrets.compare_digest(request.headers.get("Authorization","").encode(),("Bearer "+key).encode()):
-        return JsonResponse({"error":"CI token required"},status=401)
-    if request.method=="POST":
-        exercise=get_object_or_404(Exercise,pk=pk)
-        from django.core.exceptions import ValidationError
-        try: run=enqueue(exercise)
-        except ValidationError as e: return JsonResponse({"error":e.messages},status=400)
-        Audit.objects.create(actor="CI",action="Started "+exercise.name)
-        return JsonResponse({"id":run.pk,"report":f"/api/ci/runs/{run.pk}"},status=202)
-    run=get_object_or_404(Run,pk=pk)
-    return JsonResponse({"id":run.pk,"state":run.state,"result":run.result})

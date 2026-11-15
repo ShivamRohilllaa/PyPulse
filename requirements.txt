@@ -3,3 +3,6 @@ httpx>=0.27,<0.29
 whitenoise>=6.8,<7
 gunicorn>=23,<27
 bcrypt>=4,<6
+cryptography>=44,<50
+pycurl>=7.45.4,<8
+PyYAML>=6,<7

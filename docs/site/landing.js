@@ -1,4 +1,5 @@
 const reports = {
+  uptime: {title:"Catch an unhealthy endpoint.", description:"Three Django endpoints returned a healthy order, a deliberately slow response and an intentional failure. Scheduled checks distinguished all three.", alt:"Uptime dashboard showing healthy, slow and failed Django endpoints."},
   traffic: {title:"Find the failing route.", description:"Thirty requests hit a Django orders app. Six were deliberately slow. Three failed. Route-level counts show exactly which view returned each error.", alt:"Django traffic report showing 30 requests and three intentional errors."},
   benchmark: {title:"Measure a release under load.", description:"All 300 requests to the order lookup succeeded in this separate local run. The measured p95 was 8.62 ms, p99 was 25.65 ms, and the worker dropped zero iterations.", alt:"Completed Python benchmark with 300 HTTP 200 responses and no dropped iterations."}
 };
@@ -11,7 +12,7 @@ for (const button of document.querySelectorAll("[data-report]")) {
     document.querySelector("#report-description p").textContent = data.description;
     const src = "screenshots/"+name+".jpg";
     const image = document.querySelector("#screen-img");
-    image.src=src; image.alt=data.alt; image.height=name==="traffic"?1220:944;
+    image.src=src; image.alt=data.alt; image.height={traffic:1220, benchmark:944, uptime:900}[name];
     for (const id of ["#screen-link","#full-image"]) document.querySelector(id).href=src;
   });
 }

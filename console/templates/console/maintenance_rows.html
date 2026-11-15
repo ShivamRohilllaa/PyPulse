@@ -1,0 +1,8 @@
+<section class="panel"><div class="panel-head"><h2>Scheduled windows</h2><span class="muted">UTC</span></div><div class="table-wrap"><table>
+<thead><tr><th>Window</th><th>Applies to</th><th>Starts</th><th>Ends</th><th>Repeats</th><th>State</th>{% if perms.console.delete_maintenance %}<th>Actions</th>{% endif %}</tr></thead>
+<tbody>{% for w in windows %}<tr><td>{{ w.name|default:"Maintenance window" }}</td><td>
+{% if w.all_monitors %}All monitors{% elif w.monitor_id %}<a href="{% url 'monitor' w.monitor_id %}">{{ w.monitor.name }}</a>{% else %}{% for m in w.targets.all %}<a href="{% url 'monitor' m.pk %}">{{ m.name }}</a>{% if not forloop.last %}, {% endif %}{% empty %}No monitors{% endfor %}{% endif %}
+</td><td>{{ w.occurs|date:"M d, Y H:i" }}</td><td>{{ w.until|date:"M d, Y H:i" }}</td><td>{{ w.get_recurrence_display }}</td><td><span class="uptime-state" data-state="{{ w.stage }}">{{ w.stage }}</span></td>
+{% if perms.console.delete_maintenance %}<td><form method="post" action="{% url 'remove_shared_window' w.pk %}" data-confirm="Remove this maintenance window from all affected monitors?">{% csrf_token %}<button>Remove</button></form></td>{% endif %}</tr>
+{% empty %}<tr><td colspan="7">No maintenance windows scheduled.</td></tr>{% endfor %}</tbody></table></div>
+{% if windows.has_other_pages %}<nav class="toolbar" aria-label="Maintenance pages">{% if windows.has_previous %}<a href="?page={{ windows.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ windows.number }} of {{ windows.paginator.num_pages }}</span>{% if windows.has_next %}<a href="?page={{ windows.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}</section>

@@ -1,6 +1,6 @@
 # PyPulse
 
-**See which Python routes are slow, which ones fail, and how many queries each Django request costs.** PyPulse is a self-hosted Django application with a Python collector, scheduler and HTTP benchmark worker. The dashboard renders on the server and refreshes live reports in the browser.
+**See which Python routes are slow, which ones fail, and how many queries each Django request costs.** PyPulse is a self-hosted Django application with a Python collector, scheduler and HTTP benchmark worker. Monitor endpoint health, replay multi-step API journeys under load, and send alerts from the same self-hosted workspace.
 
 [Explore the product site ↗](https://shivamrohilllaa.github.io/PyPulse/) · [Start here](#start-the-dashboard) · [Choose your framework](#connect-your-framework) · [Try the Django experiment](#try-the-django-experiment) · [Dashboard guide](docs/dashboard-guide.md)
 
@@ -150,13 +150,31 @@ flowchart LR
     D --> F["Traffic · Uptime · Benchmarks · Incidents"]
 ```
 
-| Open | Use it for |
+| In the dashboard | What you can do |
 | --- | --- |
-| Traffic | Route p95, SQL per request, 4xx/5xx, availability, error budget and a volume chart |
-| Uptime | Scheduled HTTP checks, response assertions and slow or failed endpoints |
-| Benchmarks | Fixed, ramp, spike, soak, stress and latency runs, thresholds, schedules, comparisons and CSV samples |
-| Incidents | Open, acknowledge and follow failures through recovery |
-| Activity | Review workspace operations and CI launches |
-| Administration | Users, permissions, maintenance windows and saved configurations |
+| **Traffic** | Inspect live route counts, p95, 4xx/5xx, Django SQL counts, availability and error budgets. |
+| **Uptime** | Check HTTP methods, authentication, expected statuses, body text and JSON fields. Filter by project, environment or tag, and review up to 90 days of history. [Uptime guide](docs/uptime.md) |
+| **Incidents** | Route outages, slow responses and recovery to Slack, Teams, SMTP or a signed webhook. Acknowledge incidents, set reminders and escalation, and schedule recurring maintenance. [Alert setup](docs/uptime.md#configure-notifications) |
+| **Benchmarks** | Run fixed, ramp, spike, soak, stress or latency tests. Choose arrival rate or virtual users. Chain requests, extract values and vary inputs with CSV. Compare reports, inspect HTTP timing phases and export samples. [Benchmark guide](docs/benchmarks.md) |
+| **Network profiles and variables** | Compare direct, Wi-Fi and mobile conditions, or define latency, bandwidth, jitter and request loss. Store global or environment-specific variables and mask secrets. |
+| **Workspace** | Manage people, roles, CI tokens, test hosts, public status, history retention, activity and JSON/YAML configuration. [Workspace guide](docs/workspace.md) |
 
-[Feature walkthrough](docs/dashboard-guide.md) · [Agent internals](python/README.md) · [MIT license](LICENSE)
+<details>
+<summary><strong>See uptime checks on the Django demo</strong></summary>
+
+The worker checked a successful order lookup, a slow response and an intentional HTTP 500. Each endpoint has its own history and incident state.
+
+[![Django demo showing healthy, slow and down endpoints](docs/screenshots/uptime.jpg)](docs/screenshots/uptime.jpg)
+
+</details>
+
+<details>
+<summary><strong>Compare direct and simulated Fast 3G requests</strong></summary>
+
+The same two-step Django order lookup ran three times on each profile. All 12 requests succeeded. The six Fast 3G requests averaged 157.4 ms in this local run.
+
+[![Six requests per profile, with measured latency and error counts](docs/screenshots/network-comparison.jpg)](docs/screenshots/network-comparison.jpg)
+
+</details>
+
+[Feature walkthrough](docs/dashboard-guide.md) · [Framework setup](#connect-your-framework) · [Agent internals](python/README.md) · [MIT license](LICENSE)

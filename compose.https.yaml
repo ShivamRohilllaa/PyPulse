@@ -1,0 +1,21 @@
+services:
+  web:
+    environment:
+      PYPULSE_HOSTS: ${PYPULSE_DOMAIN:?Set PYPULSE_DOMAIN to the dashboard hostname},localhost,127.0.0.1
+      PYPULSE_TRUST_PROXY: "1"
+      PYPULSE_HTTPS: "1"
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports: ["80:80", "443:443"]
+    environment:
+      PYPULSE_DOMAIN: ${PYPULSE_DOMAIN:?Set PYPULSE_DOMAIN to the dashboard hostname}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - pulse-caddy-data:/data
+      - pulse-caddy-config:/config
+volumes:
+  pulse-caddy-data:
+  pulse-caddy-config:

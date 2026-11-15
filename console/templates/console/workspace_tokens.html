@@ -1,0 +1,12 @@
+{% extends "console/workspace_page.html" %}{% block heading %}CI tokens{% endblock %}{% block body %}
+{% if value %}<section class="panel" role="status"><h2>Copy your token</h2><p>Save this value in your CI secret store. It is shown once.</p><code>{{ value }}</code></section>{% endif %}
+<section class="panel"><h2>Your tokens</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Last used</th><th>Status</th></tr></thead><tbody>
+{% for token in tokens %}<tr><td>{{ token.name }}</td><td><code>{{ token.prefix }}</code></td><td>{{ token.get_scope_display }}</td><td>{{ token.last_used|default:"Never" }}</td><td>{% if token.revoked %}Revoked{% else %}
+<form method="post" action="{% url 'workspace-revoke' token.pk %}">{% csrf_token %}<button>Revoke</button></form>{% endif %}</td></tr>
+{% empty %}<tr><td colspan="5">No CI tokens yet.</td></tr>{% endfor %}
+</tbody></table></div></section>
+<section class="panel ws-form"><h2>Create token</h2><form method="post">{% csrf_token %}<div class="ws-pair">
+<label class="ws-field">Token name<input name="name" maxlength="100" required placeholder="Release pipeline"></label>
+<label class="ws-field">Scope<select name="scope"><option value="read">Read run results</option>{% if may_run %}<option value="run">Start tests and read results</option>{% endif %}</select></label></div>
+<button class="primary">Create token</button></form></section>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "console/workspace_page.html" %}{% block heading %}Configuration transfer{% endblock %}{% block body %}
+<div class="ws-grid">
+<section class="panel"><h2>Export configuration</h2><form method="post" action="{% url 'workspace-export' %}">{% csrf_token %}
+<fieldset class="ws-scopes"><legend>Include sections</legend>{% for key in sections %}<label class="ws-choice"><input type="checkbox" name="sections" value="{{ key }}" checked>{{ key|capfirst }}</label>{% endfor %}</fieldset>
+<label class="ws-field">Format<select name="format"><option value="json">JSON</option><option value="yaml">YAML</option></select></label>
+<label class="ws-choice"><input type="checkbox" name="secrets">Include plaintext credentials and private request data</label>
+<button class="primary">Download configuration</button></form></section>
+<section class="panel"><h2>Import configuration</h2><form method="post" action="{% url 'workspace-import' %}" enctype="multipart/form-data">{% csrf_token %}
+<label class="ws-field">JSON or YAML file<input type="file" name="config" required accept=".json,.yaml,.yml"></label>
+<fieldset class="ws-scopes"><legend>Apply sections from file</legend>{% for key in sections %}<label class="ws-choice"><input type="checkbox" name="sections" value="{{ key }}" checked>{{ key|capfirst }}</label>{% endfor %}</fieldset>
+<label class="ws-field">Mode<select name="mode"><option value="merge">Merge with existing records</option><option value="replace">Replace selected sections</option></select></label>
+<label class="ws-choice"><input type="checkbox" name="confirm">For Replace, remove records missing from selected sections and their associated monitor history.</label>
+<button class="primary">Import configuration</button></form></section></div>
+{% endblock %}

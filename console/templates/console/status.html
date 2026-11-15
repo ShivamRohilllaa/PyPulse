@@ -1,1 +1,2 @@
-{% extends 'console/base.html' %}{% block content %}<p class="eyebrow">Public status</p><h1>Service availability</h1><section class="panel"><table><tr><th>Service</th><th>Status</th></tr>{% for m in monitors %}<tr><td>{{ m.name }}</td><td>{{ m.state }}</td></tr>{% empty %}<tr><td colspan="2">No public monitors.</td></tr>{% endfor %}</table></section>{% endblock %}
+{% extends 'console/base.html' %}{% load static %}
+{% block head %}<link rel="stylesheet" href="{% static 'console/uptime.css' %}">{% endblock %}{% block content %}<p class="eyebrow">Public status</p><h1>{{ status_title }}</h1><div data-live="uptime">{% include 'console/status_rows.html' %}</div>{% endblock %}

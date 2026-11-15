@@ -1,0 +1,1 @@
+<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th></tr></thead><tbody>{% for name, first, last, delta in data %}<tr><td>{{ name }}</td><td>{{ first|default_if_none:"—" }}</td><td>{{ last|default_if_none:"—" }}</td><td>{{ delta|default_if_none:"—" }}</td></tr>{% endfor %}</tbody></table></div>
