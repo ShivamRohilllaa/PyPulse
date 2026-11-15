@@ -1,0 +1,3 @@
+<section class="panel"><h2>Run preflight</h2><p>Targets <strong>{{ preview.hosts|join:", " }}</strong></p>
+<p>{{ preview.steps }} step{{ preview.steps|pluralize }} per iteration · {{ preview.profiles }} network profile{{ preview.profiles|pluralize }}. {% if preview.pattern != "latency" %}Planned duration <b>{{ preview.seconds_per_profile }} s per profile</b>.{% endif %}
+{% if preview.estimated_requests != None %}Estimated HTTP requests <b>{{ preview.estimated_requests }}</b>.{% else %}The request count depends on how quickly virtual users finish each iteration.{% endif %}</p></section>

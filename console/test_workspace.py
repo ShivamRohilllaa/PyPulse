@@ -33,6 +33,9 @@ class TransferTests(TestCase):
             request_secret=seal(json.dumps({"headers":{"Authorization":"SECRET_HEADER"}, "statuses":[200,204],
                                             "json_equals":{"ready": True}})))
         self.monitor.channels.add(self.channel)
+        self.monitor.status_expression = "2xx"
+        self.monitor.save(update_fields=["status_expression"])
+        self.monitor.escalation_channels.add(self.channel)
         start = timezone.now()
         Maintenance.objects.create(monitor=self.monitor, start=start, end=start+timedelta(hours=1), recurrence="weekly")
         self.test = Exercise.objects.create(name="Smoke", url="http://localhost:8000/health",
@@ -67,6 +70,8 @@ class TransferTests(TestCase):
         import_config(doc)
         monitor = Monitor.objects.get(name="Readiness")
         self.assertEqual(monitor.channels.get().name, "Ops")
+        self.assertEqual(monitor.escalation_channels.get().name, "Ops")
+        self.assertEqual(monitor.status_expression, "2xx")
         self.assertEqual(monitor.network_profile.name, "Mobile")
         self.assertEqual(Exercise.objects.get(name="Smoke").options["profiles"], [monitor.network_profile.pk])
         self.assertEqual(Maintenance.objects.get().recurrence, "weekly")
@@ -205,10 +210,12 @@ class WorkspaceViewsTests(TestCase):
         reader = get_user_model().objects.get(pk=self.reader.pk)
         self.assertTrue(reader.has_perm("console.add_run"))
         self.assertFalse(reader.has_perm("console.add_service"))
-        self.assertFalse(reader.has_perm("console.change_variable"))
+        self.assertTrue(reader.has_perm("console.change_variable"))
         self.client.force_login(reader)
-        for page in ("settings/", "members/", "config/"):
-            self.assertEqual(self.client.get("/workspace/" + page).status_code, 403)
+        for page in ("settings/", "config/"):
+            self.assertEqual(self.client.get("/workspace/" + page).status_code, 200)
+        self.assertEqual(self.client.get("/workspace/members/").status_code, 403)
+        self.assertEqual(self.client.post("/workspace/settings/", {}).status_code, 403)
 
     def test_admin_can_reach_password_reset_and_last_login(self):
         self.client.force_login(self.admin)

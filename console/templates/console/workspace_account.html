@@ -1,0 +1,3 @@
+{% extends "console/workspace_page.html" %}{% block heading %}My account{% endblock %}{% block body %}
+<section class="panel"><h2>{{ user.get_full_name|default:user.get_username }}</h2><p>{{ user.email|default:user.get_username }} · {{ role|capfirst }}</p></section>
+<section class="panel fields"><h2>Change password</h2><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary">Change password</button></form></section>{% endblock %}

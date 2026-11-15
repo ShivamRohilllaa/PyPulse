@@ -15,6 +15,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from . import probes
+from .uptime_rules import check_rules
 from .models import AlertChannel, AlertDelivery, Check, Incident, Maintenance, Monitor
 
 
@@ -48,27 +49,6 @@ def request_options(monitor):
     return json.loads(probes.unseal(monitor.request_secret)) if monitor.request_secret else {}
 
 
-def verdict(monitor, options, result):
-    if result["error"] or not result["status"]:
-        return "Request failed"
-    if result["status"] not in options.get("statuses", [monitor.expected_status]):
-        return "Unexpected HTTP status"
-    if monitor.contains and monitor.contains.encode() not in result["body"]:
-        return "Body text mismatch"
-    if "json_equals" in options:
-        try:
-            observed = json.loads(result["body"])
-            for path, expected in options["json_equals"].items():
-                value = observed
-                for part in path.split(".") if path else []:
-                    value = value[int(part)] if isinstance(value, list) and part.isdecimal() else value[part]
-                if type(value) is not type(expected) or value != expected:
-                    return "JSON value mismatch"
-        except (ValueError, IndexError, KeyError, TypeError, RecursionError):
-            return "JSON assertion failed"
-    return ""
-
-
 def notify(monitor, state, event=None, incident=None, now=None):
     now = now or timezone.now()
     if in_maintenance(monitor, now):
@@ -76,7 +56,9 @@ def notify(monitor, state, event=None, incident=None, now=None):
     event = event or state
     if monitor.alert_events and event not in monitor.alert_events:
         return
-    if event == "Escalation" and monitor.escalation_channel_id:
+    if event == "Escalation" and monitor.escalation_channels.exists():
+        channels = monitor.escalation_channels.filter(enabled=True)
+    elif event == "Escalation" and monitor.escalation_channel_id:
         channels = AlertChannel.objects.filter(enabled=True, pk=monitor.escalation_channel_id)
     elif event != "Escalation" and monitor.channels.exists():
         channels = monitor.channels.filter(enabled=True)
@@ -93,12 +75,12 @@ def measure_monitor(monitor, *, timeout_ms=None):
     """Evaluate the request without recording or exposing its contents."""
     try:
         opts = request_options(monitor)
-        request = {key: opts[key] for key in ("headers", "query", "body", "auth") if key in opts}
+        request = {key: opts[key] for key in ("headers", "query", "body", "form", "auth", "ignore_tls") if key in opts}
         request.update(url=monitor.url, method=monitor.method)
         variables = probes.workspace_variables(monitor.environment)
         profile = monitor.network_profile.snapshot() if monitor.network_profile else None
         result = probes.probe(request, variables, profile, timeout_ms=timeout_ms if timeout_ms is not None else monitor.timeout_ms)
-        reason = verdict(monitor, opts, result)
+        reason = check_rules(monitor, opts, result)
     except Exception:
         # Invalid stored configuration and transport failures must not reveal request secrets.
         result, reason = {"ms": 0, "status": 0}, "Check configuration failed"
@@ -128,18 +110,19 @@ def check_monitor(pk):
         if monitor.state == previous:
             return
         incident = Incident.objects.filter(monitor=monitor, closed__isnull=True).first()
-        if monitor.state == "Down":
+        if incident:
+            incident.closed = now
+            incident.save(update_fields=["closed"])
+        if monitor.state in ("Slow", "Down"):
             reminder = now + timedelta(minutes=monitor.reminder_minutes) if monitor.reminder_minutes else None
             escalation = now + timedelta(minutes=monitor.escalation_minutes) if monitor.escalation_minutes else None
-            incident = Incident.objects.create(monitor=monitor, opened=now, next_reminder=reminder, next_escalation=escalation)
-            notify(monitor, "Down", "Opened", incident, now)
-        elif previous == "Down":
-            if incident:
-                incident.closed = now
-                incident.save(update_fields=["closed"])
-            notify(monitor, monitor.state, "Recovered", incident, now)
-        elif monitor.state == "Slow" or previous == "Slow":
-            notify(monitor, monitor.state, monitor.state, now=now)
+            issue = Incident.objects.create(monitor=monitor, opened=now, kind=monitor.state,
+                reason=reason or "Latency above threshold", suppressed=in_maintenance(monitor,now),
+                next_reminder=reminder, next_escalation=escalation)
+            notify(monitor, monitor.state, "Opened" if monitor.state == "Down" else "Slow", issue, now)
+        elif incident and previous in ("Slow","Down"):
+            event = "Up" if previous == "Slow" and "Up" in monitor.alert_events and "Recovered" not in monitor.alert_events else "Recovered"
+            notify(monitor, "Up", event, incident, now)
 
 
 def queue_followups(now):
@@ -159,10 +142,10 @@ def queue_followups(now):
                 item.save(update_fields=["next_escalation","next_reminder"])
                 continue
             if item.next_escalation and item.next_escalation <= now:
-                notify(item.monitor, "Down", "Escalation", item, now)
+                notify(item.monitor, item.kind, "Escalation", item, now)
                 item.escalated, item.next_escalation = True, None
             if item.next_reminder and item.next_reminder <= now:
-                notify(item.monitor, "Down", "Reminder", item, now)
+                notify(item.monitor, item.kind, "Reminder", item, now)
                 item.reminder_at = now
                 minutes = item.monitor.reminder_minutes
                 item.next_reminder = now + timedelta(minutes=minutes) if minutes else None
@@ -207,12 +190,12 @@ def send_delivery(delivery):
         return
     payload = {"monitor": name, "state": delivery.state, "event": delivery.event, "at": delivery.at.isoformat(), "delivery_id": delivery.pk}
     if kind == "slack":
-        payload = {"text": text}
+        payload = {"text": (config.get("mention","").strip() + " " + text).strip()}
     elif kind == "teams":
         payload = {"type": "message", "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
                    "content": {"type": "AdaptiveCard", "version": "1.2", "body": [{"type": "TextBlock", "text": text, "wrap": True}]}}]}
     body = json.dumps(payload, separators=(",", ":")).encode()
-    headers = {"Content-Type": "application/json"}
+    headers = {**(config.get("headers",{}) if kind == "webhook" else {}), "Content-Type": "application/json"}
     if kind == "webhook" and config.get("secret"):
         headers["X-PyPulse-Signature"] = hmac.new(config["secret"].encode(), body, hashlib.sha256).hexdigest()
     post_json(config["url"], body, headers)

@@ -3,13 +3,13 @@
 <meta name="theme-color" content="#101717"><title>{% firstof title section 'Sign in' %} · PyPulse</title>
 <script src="{% static 'console/theme.js' %}"></script><link rel="stylesheet" href="{% static 'console/pulse.css' %}">
 <script defer src="{% static 'console/live.js' %}"></script>{% block head %}{% endblock %}</head>
-<body><a class="skip" href="#main">Skip to content</a><div class="shell"><header class="mast">
+<body{% if user.is_authenticated and request.scope %} data-events{% endif %}><a class="skip" href="#main">Skip to content</a><div class="shell"><header class="mast">
 <a class="wordmark" href="/"><b class="mark" aria-hidden="true">∿</b>PyPulse</a>
 {% if user.is_authenticated %}<nav aria-label="Dashboard">{% for name,url in navigation %}<a href="{{ url }}" {% if section == name %}aria-current="page"{% endif %}>{{ name }}</a>{% endfor %}</nav>{% endif %}
 <details class="account"><summary>{% if user.is_authenticated %}Workspace{% else %}Appearance{% endif %}</summary><div>
 {% if user.is_authenticated %}<a href="/workspace/">Workspace overview</a>{% if perms.console.view_alertchannel %}<a href="/incidents/channels/">Alert channels</a>{% endif %}
-{% if perms.console.view_networkprofile %}<a href="/networks/">Network profiles</a>{% endif %}
-{% if perms.console.view_variable %}<a href="/variables/">Variables &amp; secrets</a>{% endif %}<a href="/activity/">Activity</a>
+<a href="/networks/">Network profiles</a>
+<a href="/variables/">Variables &amp; secrets</a><a href="/activity/">Activity</a>
 <a href="/status/">Public status</a>{% endif %}<button type="button" data-theme-toggle>Use light mode</button>
 {% if user.is_authenticated %}<form method="post" action="{% url 'logout' %}">{% csrf_token %}<button>Sign out</button></form>{% endif %}</div></details></header>
 <main id="main">{% for msg in messages %}<p class="notice" role="status">{{ msg }}</p>{% endfor %}{% block content %}{% endblock %}</main></div></body></html>

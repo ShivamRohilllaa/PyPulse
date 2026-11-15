@@ -1,0 +1,1 @@
+{% extends 'console/base.html' %}{% block content %}<p class="eyebrow"><a href="{% url 'benchmarks' %}">Benchmarks</a></p><h1>{{ exercise.name }}</h1>{% include 'console/preflight.html' %}<form method="post">{% csrf_token %}<button class="primary">Start benchmark</button></form>{% endblock %}

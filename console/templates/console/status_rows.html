@@ -1,1 +1,5 @@
-<section class="panel"><div class="table-wrap"><table><thead><tr><th>Service</th><th>Current status</th><th>Checks passed · 24h</th></tr></thead><tbody>{% for m in monitors %}<tr><td>{{ m.name }}</td><td>{% include 'console/uptime_state.html' with monitor=m %}</td><td>{% if m.n %}{{ m.availability|floatformat:2 }}%{% else %}No checks{% endif %}</td></tr>{% empty %}<tr><td colspan="3">No public monitors.</td></tr>{% endfor %}</tbody></table></div></section>
+{% if active %}<section class="panel"><h2>Current incidents</h2><ul>{% for i in active %}<li>{{ i.monitor.name }} · {{ i.kind }} since {{ i.opened|date:"M d H:i" }} UTC</li>{% endfor %}</ul></section>{% endif %}
+<section class="panel"><h2>{{ summary }}</h2>{% for m in monitors %}<article class="public-service">
+<div class="panel-head"><strong>{{ m.name }}</strong>{% include 'console/uptime_state.html' with monitor=m %}</div>
+<div class="meta"><span>Last 24 hours · {% if m.n %}{{ m.availability|floatformat:2 }}%{% else %}No checks{% endif %}</span><span>Last 90 days · {% if m.uptime90 != None %}{{ m.uptime90|floatformat:2 }}%{% else %}No checks{% endif %}</span></div>
+{% include 'console/history_strip.html' with cells=m.days description='Daily check success' %}<div class="axis"><span>90 days ago</span><span>Today</span></div></article>{% empty %}<p>No public monitors.</p>{% endfor %}</section>

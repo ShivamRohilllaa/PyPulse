@@ -7,15 +7,18 @@ from datetime import timedelta,timezone as dt_timezone
 from urllib.parse import urlsplit
 from django.core.exceptions import ValidationError
 
-REF = re.compile(r"\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
+REF = re.compile(r"\{\{\s*\$?[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 SENSITIVE = re.compile(r"authorization|cookie|password|passwd|secret|api.?key|token", re.I)
 PHASES = ("dns", "tcp", "tls", "ttfb", "download")
 MAX_SAMPLES = 30_000
 LIMITS = {"users": (1,20,5), "timeout_ms": (50,30000,5000), "delay_ms": (0,60000,0),
-          "count": (1,10000,None), "plateau_windows": (0,60,0), "start_load": (1,50,None),
+          "count": (1,10000,None), "max_avg_ms": (0,300000,None), "max_p99_ms": (0,300000,None),
+          "stop_p95_ms": (1,300000,None), "plateau_growth_pct": (0,100,0), "hold_seconds": (1,3600,None),
+          "base_load": (1,50,None), "base_seconds": (1,3600,None), "peak_seconds": (1,3600,None),
+          "recovery_seconds": (1,3600,None), "plateau_windows": (0,60,0), "start_load": (1,50,None),
           "step_size": (1,50,None), "stage_seconds": (1,3600,None)}
-KEYS = set(LIMITS) | {"model", "environment", "profiles", "steps", "csv_data", "stages", "keep_alive", "daily_at", "min_rps", "csv_order", "statuses"}
+KEYS = set(LIMITS) | {"model", "environment", "profiles", "steps", "csv_data", "stages", "keep_alive", "daily_at", "min_rps", "csv_order", "statuses", "profile_mode", "stress_policy", "stop_error_pct", "stress_to_max", "gate_policy"}
 
 
 def fail(text):
@@ -34,7 +37,12 @@ def statuses(value):
         if len(value)>2000: fail("Status code list is too long.")
         codes=[]
         for part in value.split(","):
-            ends=part.strip().split("-")
+            part=part.strip()
+            if re.fullmatch(r"[1-5]xx",part,re.I):
+                first=int(part[0])*100
+                codes.extend(range(first,first+100))
+                continue
+            ends=[item.strip() for item in part.split("-")]
             if len(ends)>2 or not all(re.fullmatch(r"[1-5][0-9]{2}",v) for v in ends):
                 fail("Enter HTTP codes or ranges, e.g. 200,201,204 or 200-299.")
             first,last=int(ends[0]),int(ends[-1])
@@ -98,16 +106,31 @@ def validate_options(options, url):
         v=options.get(k,default)
         if v is not None:
             out[k]=integer(v,lo,hi,k)
+    for key,default,choices in (
+        ("profile_mode","parallel",("parallel","sequential")),
+        ("gate_policy","evaluate",("evaluate","measure")),
+        ("stress_policy","gates",("gates","independent")),
+    ):
+        out[key]=options.get(key,default)
+        if out[key] not in choices: fail(f"Invalid {key}.")
+    out["stress_to_max"]=options.get("stress_to_max",False)
+    if type(out["stress_to_max"]) is not bool: fail("Stress to maximum must be true or false.")
+    error_limit=options.get("stop_error_pct")
+    if error_limit is not None:
+        if type(error_limit) not in (int,float) or not math.isfinite(error_limit) or not 0<=error_limit<=100:
+            fail("Stress error rate must be between 0 and 100%.")
+        out["stop_error_pct"]=error_limit
     out["model"]=options.get("model","arrival")
     if out["model"] not in ("arrival","users"):
         fail("Choose an arrival-rate or virtual-user test.")
     env=options.get("environment","")
     if not isinstance(env,str) or len(env)>80:
         fail("Environment must be 80 characters or less.")
-    from .probes import interpolate, workspace_variables
+    from .probes import interpolate, workspace_variables, validate_dynamic_placeholders
     variables = None
     def approved_template(target):
         nonlocal variables
+        validate_dynamic_placeholders(target)
         if not isinstance(target,str) or len(target)>2048: fail("Invalid target template.")
         # Authorize the configured scheme and host using the environment, even when the
         # path/query value comes from a later extraction or fixture row.
@@ -143,12 +166,12 @@ def validate_options(options, url):
         fail("A selected network profile no longer exists.")
     out["profiles"]=profiles
     steps=options.get("steps",[]) or []
-    if not isinstance(steps,list) or len(steps)>12:
-        fail("Use an array of up to 12 scenario steps.")
+    if not isinstance(steps,list) or len(steps)>20:
+        fail("Use an array of up to 20 scenario steps.")
     names=set()
     normalized=[]
     for n,step in enumerate(steps,1):
-        if not isinstance(step,dict) or set(step)-{"name","url","method","headers","query","body","auth","extract","expected_status","expected_statuses"}:
+        if not isinstance(step,dict) or set(step)-{"name","url","method","headers","query","body","auth","extract","expected_status","expected_statuses","form","ignore_tls"}:
             fail(f"Step {n}: unknown request option.")
         label=step.get("name",f"Step {n}")
         if not isinstance(label,str) or not label.strip() or len(label)>64 or label in names:
@@ -177,12 +200,39 @@ def validate_options(options, url):
             if key in auth and not REF.fullmatch(auth[key]):
                 fail("Use a variable reference for authentication values.")
         body=step.get("body","")
-        if not isinstance(body,str) or len(body.encode())>16384:
-            fail("Step bodies must be text of at most 16 KiB.")
+        import json
+        try:
+            body_size=len((body if isinstance(body,str) else json.dumps(body,allow_nan=False)).encode())
+        except (TypeError,ValueError,RecursionError):
+            fail("Invalid request body.")
+        if not isinstance(body,(str,dict,list)) or body_size>16384:
+            fail("Use a text or JSON request body of at most 16 KiB.")
+        form=stringmap(step.get("form",{}),"Form body")
+        if form and body: fail("Choose a form or a text/JSON body for each request.")
+        if form and len(json.dumps(form).encode())>16384: fail("Form body exceeds 16 KiB.")
+        ignore_tls=step.get("ignore_tls",False)
+        if type(ignore_tls) is not bool: fail("TLS verification setting must be true or false.")
         extract=stringmap(step.get("extract",{}),"Extraction")
-        if any(not NAME.fullmatch(k) or not re.fullmatch(r"(?:json:[A-Za-z0-9_.-]+|header:[A-Za-z0-9_-]+)",v) for k,v in extract.items()):
-            fail("Use json:field.path or header:Header-Name to extract a value.")
+        for key,selector in extract.items():
+            if not NAME.fullmatch(key): fail("Invalid extraction variable name.")
+            if selector.startswith("regex:"):
+                import regex
+                expression=selector[6:]
+                if not expression or len(expression)>512: fail("Regex selectors must be 1–512 characters.")
+                try: regex.compile(expression)
+                except (regex.error,RecursionError): fail("Invalid extraction regex.")
+            elif selector.startswith("json:"):
+                from .uptime_rules import valid_path
+                path=selector[5:].removeprefix("$").removeprefix(".")
+                if not valid_path(path): fail("Invalid JSON extraction path.")
+            elif not re.fullmatch(r"header:[A-Za-z0-9_-]+",selector):
+                fail("Use json:field.path, header:Header-Name or regex:pattern.")
         normal=dict(name=label,url=target,method=method,headers=headers,query=query,auth=auth,body=body,extract=extract)
+        if form:
+            normal.pop("body")
+            normal["form"]=form
+        validate_dynamic_placeholders({k:normal[k] for k in ("headers","query","body","form","auth") if k in normal})
+        if ignore_tls: normal["ignore_tls"]=True
         if "expected_status" in step:
             normal["expected_status"]=integer(step["expected_status"],100,599,"Expected HTTP status")
         if "expected_statuses" in step:
@@ -216,11 +266,22 @@ def validate_budget(options, pattern, rate, seconds):
         fail("For a stepped ramp or stress test set start load, step size and stage duration together, without custom stages.")
     if shape and options["start_load"]>(options.get("users",5) if options["model"]=="users" else rate):
         fail("The starting load exceeds the target.")
+    spike_keys={"base_load","base_seconds","peak_seconds","recovery_seconds"} & options.keys()
+    if spike_keys and (len(spike_keys)!=4 or pattern!="spike" or stages):
+        fail("Set all four spike timing controls, or use custom stages.")
+    if spike_keys and options["base_load"]>(options["users"] if options["model"]=="users" else rate):
+        fail("Spike baseline must be at or below its peak.")
+    if options.get("hold_seconds") and (pattern!="ramp" or not shape):
+        fail("A final hold requires a stepped ramp.")
+    if options.get("stress_to_max") and (pattern!="stress" or not shape):
+        fail("To run through the maximum, configure a stepped stress test.")
     if pattern=="latency":
         total=options.get("count",seconds)*steps*rounds
-    elif options["model"]=="arrival":
-        total=(sum(s["target"]*s["seconds"] for s in stages) if stages else rate*seconds)*steps*rounds
     else:
-        total=0  # A runtime budget bounds closed-loop traffic, independent of response time.
+        from .benchstats import stage_plan
+        plan=stage_plan({"pattern":pattern,"seconds":seconds,"rate":rate},options)
+        seconds=sum(stage["seconds"] for stage in plan)
+        if seconds>3600: fail("Limit each workload to one hour per profile.")
+        total=sum(stage["target"]*stage["seconds"] for stage in plan)*steps*rounds if options["model"]=="arrival" else 0
     if total>MAX_SAMPLES: fail("Limit a run to 30,000 requests across all steps and profiles.")
     if seconds*rounds>14400: fail("Combined profile duration must be at most four hours.")

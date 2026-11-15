@@ -62,10 +62,10 @@ def schedule_runs(now):
             if Run.objects.filter(exercise=exercise, state__in=["Queued", "Running"]).exists():
                 continue
             try:
-                enqueue(exercise)
+                enqueue(exercise, trigger="scheduled")
             except ValidationError:
                 # A removed profile or edited allow-list can invalidate a previously saved test.
-                Run.objects.create(exercise=exercise, state="Failed", finished=now,
+                Run.objects.create(exercise=exercise, name=exercise.name, trigger="scheduled", state="Failed", finished=now,
                                    error="Scheduled test configuration is no longer valid.")
 
 

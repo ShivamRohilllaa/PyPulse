@@ -1,0 +1,10 @@
+{% with settings=run.config.settings %}
+{% if settings %}
+<section class="panel"><details><summary>Test configuration</summary>
+<div class="meta"><span>Concurrency limit <b>{{ settings.concurrency }}</b></span><span>Request timeout <b>{{ settings.timeout_ms }} ms</b></span><span>Think time <b>{{ settings.delay_ms }} ms</b></span>
+<span>Keep-alive <b>{{ settings.keep_alive|yesno:"On,Off" }}</b></span><span>Accepted statuses <b>{{ settings.statuses }}</b></span>
+<span>Profile execution <b>{{ settings.profile_mode|title }}</b></span>{% if settings.count %}<span>Iterations / profile <b>{{ settings.count }}</b></span>{% endif %}</div>
+<h3>Request sequence</h3><ol>{% for step in settings.steps %}<li>{{ step.method }} · {{ step.name }}</li>{% endfor %}</ol>
+{% if settings.stages %}<h3>Planned stages</h3><ol>{% for stage in settings.stages %}<li>Target {{ stage.target }} for {{ stage.seconds }} s</li>{% endfor %}</ol>{% endif %}
+</details></section>{% endif %}
+{% endwith %}

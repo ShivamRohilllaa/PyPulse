@@ -2,12 +2,13 @@
 <link rel="stylesheet" href="{% static 'console/workspace.css' %}">
 <header class="page-head"><h1>Workspace</h1></header>
 <div class="ws-grid">
-{% if perms.console.view_networkprofile %}<a class="panel ws-link" href="/networks/"><h2>Network profiles</h2><p>Bandwidth, delay and simulated request loss for checks and tests.</p></a>{% endif %}
-{% if perms.console.view_variable %}<a class="panel ws-link" href="/variables/"><h2>Variables</h2><p>Values and credentials shared across requests.</p></a>{% endif %}
+<a class="panel ws-link" href="/networks/"><h2>Network profiles</h2><p>Bandwidth, delay and simulated request loss for checks and tests.</p></a>
+<a class="panel ws-link" href="/variables/"><h2>Variables</h2><p>Values and credentials shared across requests.</p></a>
 <a class="panel ws-link" href="{% url 'workspace-tokens' %}"><h2>CI tokens</h2><p>Issue credentials for builds and revoke old tokens.</p></a>
-{% if user.is_superuser %}
+<a class="panel ws-link" href="{% url 'workspace-account' %}"><h2>My account</h2><p>View your role and change your password.</p></a>
+<a class="panel ws-link" href="{% url 'workspace-system' %}"><h2>System</h2><p>Process health, scheduled checks and test runs.</p></a>
 <a class="panel ws-link" href="{% url 'workspace-settings' %}"><h2>Workspace settings</h2><p>Monitor defaults, history retention and public status.</p></a>
-<a class="panel ws-link" href="{% url 'workspace-config' %}"><h2>Configuration transfer</h2><p>Download or restore selected settings as JSON or YAML.</p></a>
-<a class="panel ws-link" href="{% url 'workspace-members' %}"><h2>Members</h2><p>Manage accounts, permissions and workspace access.</p></a>
+{% if may_export %}<a class="panel ws-link" href="{% url 'workspace-config' %}"><h2>Configuration transfer</h2><p>Download or restore selected settings as JSON or YAML.</p></a>
+{% endif %}{% if user.is_superuser %}<a class="panel ws-link" href="{% url 'workspace-members' %}"><h2>Members</h2><p>Manage accounts, permissions and workspace access.</p></a>
 {% endif %}{% if user.is_staff %}<a class="panel ws-link" href="{% url 'admin:index' %}"><h2>Django administration</h2><p>Manage custom groups and account-level permissions.</p></a>{% endif %}</div>
 {% endblock %}

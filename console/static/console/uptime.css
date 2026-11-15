@@ -33,3 +33,11 @@
 .uptime-filters input[type="search"] { min-width: 0; width: 11rem; }
 .uptime-state[data-state="Active"] { color: var(--accent); }
 @media(max-width:600px){.uptime-filters input[type="search"] { width:100%; }}
+.history-strip {display:flex; gap:1px; height:1.45rem; width:100%; overflow:hidden; border-radius:.28rem}
+.history-cell {flex:1 1 0;min-width:0;background:var(--line)}
+.history-cell.good {background:var(--accent)} .history-cell.warn {background:#c69232} .history-cell.bad {background:var(--coral)}
+.public-service {padding:.9rem 0;border-top:1px solid var(--line)}
+.chart-legend {display:flex;gap:1rem;font-size:.82rem;color:var(--accent)} .chart-legend span:last-child {color:var(--coral)}
+
+.endpoint-path {display:block;max-width:24rem;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+tr[data-condition="Down"] td:first-child {box-shadow:inset 2px 0 var(--coral)}

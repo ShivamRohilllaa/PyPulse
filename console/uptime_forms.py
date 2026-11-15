@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from email.utils import parseaddr
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from django import forms
@@ -7,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 
 from .models import AlertChannel, Maintenance, Monitor
+from .uptime_rules import status_codes, validate_json_rules
 
 
 class PrivateJSON(forms.JSONField):
@@ -49,16 +51,17 @@ class MonitorForm(forms.ModelForm):
     method = forms.ChoiceField(choices=[(m,m) for m in ("GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS")], initial="GET")
     alert_events = forms.MultipleChoiceField(required=False, choices=[(value,value) for value in
         ("Opened", "Recovered", "Slow", "Up", "Reminder", "Escalation")], help_text="Leave empty to receive every supported event.")
+    options_patch = forms.BooleanField(required=False, widget=forms.HiddenInput)
     options = PrivateJSON(required=False, label="Private request options (JSON)", help_text=(
-        'Available keys: headers, query, body, auth, statuses and json_equals. '
+        'Available keys: headers, query, body, form, auth, ignore_tls, statuses, json_checks and json_equals. '
         'For example {"headers":{"Accept":"application/json"},"json_equals":{"health.ready":true}}. '
         'Leave blank to keep existing options. Enter {} to reset.'))
     class Meta:
         model = Monitor
-        fields = ("name","group","tags","method","url","environment","network_profile","options","interval","timeout_ms",
-                  "expected_status","contains","warn_ms","failure_threshold","alert_events","channels","reminder_minutes","escalation_minutes","escalation_channel","paused","public")
+        fields = ("name","group","tags","method","url","environment","network_profile","options","options_patch","interval","timeout_ms",
+                  "expected_status","status_expression","contains","warn_ms","failure_threshold","alert_events","channels","reminder_minutes","escalation_minutes","escalation_channel","escalation_channels","paused","public")
         labels = {"group":"Project / group","channels":"Standard alert channels","contains": "Required body text", "warn_ms": "Slow response threshold (ms)", "public": "Show on public status page"}
-        help_texts = {"tags":"Separate tags with commas.", "channels":"Leave empty to use all standard channels.", "group": "Group related endpoints under a shared label.", "reminder_minutes": "Repeat alerts for an unacknowledged incident. 0 disables reminders.",
+        help_texts = {"status_expression":"Optional ranges and classes, e.g. 200-204, 301, 4xx. Overrides the single status.", "escalation_channels":"Selecting several channels overrides the single escalation destination.", "tags":"Separate tags with commas.", "channels":"Leave empty to use all standard channels.", "group": "Group related endpoints under a shared label.", "reminder_minutes": "Repeat alerts for an unacknowledged incident. 0 disables reminders.",
                       "escalation_minutes": "Notify escalation channels once after this delay. 0 disables escalation."}
 
     def __init__(self, *args, **kwargs):
@@ -94,23 +97,46 @@ class MonitorForm(forms.ModelForm):
                 self.add_error("url", "Enter a resolvable HTTP(S) URL; move any query parameters to private request options.")
         return data
 
+    def clean_status_expression(self):
+        value = self.cleaned_data.get("status_expression", "").strip()
+        if value and not status_codes(value):
+            raise ValidationError("Supply a status code, range or class.")
+        return value
+
     def clean_options(self):
         options = self.cleaned_data.get("options")
         if options is None:
             return None
-        if set(options) - {"headers","query","body","auth","statuses","json_equals"}:
+        if str(self.data.get(self.add_prefix("options_patch"),"")).lower() in ("1","true","on"):
+            from .uptime_engine import request_options
+            saved = request_options(self.instance)
+            for key, value in options.items():
+                if value is None:
+                    saved.pop(key, None)
+                else:
+                    saved[key] = value
+            options = saved
+        if set(options) - {"headers","query","body","form","auth","ignore_tls","statuses","json_equals","json_checks"}:
             raise ValidationError("An unsupported request option was supplied.")
-        for key in ("headers", "query"):
+        for key in ("headers", "query", "form"):
             if key in options and (not isinstance(options[key], dict) or
                     not all(isinstance(v, str) and isinstance(k,str) for k,v in options[key].items())):
                 raise ValidationError("Headers and query parameters must be JSON objects with string values.")
-        if "body" in options and not isinstance(options["body"], (str, dict)):
+        if "ignore_tls" in options and type(options["ignore_tls"]) is not bool:
+            raise ValidationError("TLS override must be true or false.")
+        if "form" in options and "body" in options:
+            raise ValidationError("Choose a form body or a text/JSON body.")
+        if "json_checks" in options:
+            validate_json_rules(options["json_checks"])
+        if "body" in options and not isinstance(options["body"], (str, dict, list)):
             raise ValidationError("Supply a text or JSON object body.")
         if "statuses" in options and (not isinstance(options["statuses"], list) or not options["statuses"] or
                 any(type(v) is not int or not 100 <= v <= 599 for v in options["statuses"])):
             raise ValidationError("Supply one or more HTTP status codes between 100 and 599.")
         if "json_equals" in options and not isinstance(options["json_equals"], dict):
             raise ValidationError("Supply a JSON object mapping dotted paths to expected values.")
+        from .probes import validate_dynamic_placeholders
+        validate_dynamic_placeholders({k:options[k] for k in ("headers","query","form","body","auth") if k in options})
         if "auth" in options:
             auth = options["auth"]
             required = {"none": (), "bearer": ("token",), "basic": ("username", "password"), "api_key": ("name", "value")}
@@ -131,12 +157,18 @@ class MonitorForm(forms.ModelForm):
 
 
 class ChannelForm(forms.ModelForm):
+    config_patch = forms.BooleanField(required=False,widget=forms.HiddenInput)
+
     configuration = PrivateJSON(required=False, label="Private delivery configuration (JSON)",
         help_text="Editing a channel? Leave this blank to keep its existing configuration.")
     class Meta:
         model = AlertChannel
-        fields = ("name","kind","enabled","escalation_only","configuration")
+        fields = ("name","kind","enabled","escalation_only","configuration","config_patch")
         help_texts = {"escalation_only": "Receive escalations instead of initial, reminder and recovery alerts."}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["kind"].choices = [(value,"Webhook" if value=="webhook" else label) for value,label in self.fields["kind"].choices]
 
     def clean(self):
         data = super().clean()
@@ -147,6 +179,23 @@ class ChannelForm(forms.ModelForm):
             if not self.instance.config_secret or kind != self.instance.kind:
                 self.add_error("configuration", "Supply the channel configuration.")
             return data
+        if self.cleaned_data.get("config_patch") and self.instance.config_secret and kind == self.instance.kind:
+            from .probes import unseal
+            saved = json.loads(unseal(self.instance.config_secret))
+            for field, value in config.items():
+                if value is None:
+                    saved.pop(field,None)
+                else:
+                    saved[field] = value
+            config = data["configuration"] = saved
+        if kind == "slack" and "mention" in config and not isinstance(config["mention"],str):
+            self.add_error("configuration","The Slack mention must be text.")
+        if kind == "webhook":
+            headers = config.get("headers",{})
+            if not isinstance(headers,dict) or any(not isinstance(k,str) or not k.isascii() or not k.replace("-","").isalnum()
+                    or k.lower() in {"host","content-type","content-length","transfer-encoding","connection","x-pypulse-signature"}
+                    or not isinstance(v,str) or "\n" in v or "\r" in v for k,v in headers.items()):
+                self.add_error("configuration","Supply valid custom HTTP headers.")
         if kind == "email":
             try:
                 if (not isinstance(config.get("host"),str) or not config["host"] or type(config.get("port")) is not int
@@ -156,7 +205,9 @@ class ChannelForm(forms.ModelForm):
                 if config.get("username") and (not isinstance(config.get("password"),str) or config.get("security") == "plain"):
                     raise ValueError
                 for addr in [config["from"], *config["to"]]:
-                    validate_email(addr)
+                    if not isinstance(addr,str) or "\r" in addr or "\n" in addr:
+                        raise ValueError
+                    validate_email(parseaddr(addr)[1])
             except (ValidationError, ValueError, TypeError, AttributeError):
                 self.add_error("configuration","Supply SMTP host, port, from, to and valid TLS settings.")
         else:
@@ -166,10 +217,10 @@ class ChannelForm(forms.ModelForm):
                 if (not parsed.hostname or parsed.username or parsed.password or parsed.fragment or
                         (parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost","127.0.0.1","::1")))):
                     raise ValueError
-                if kind == "webhook" and (not isinstance(config.get("secret"),str) or not config["secret"]):
+                if kind == "webhook" and "secret" in config and not isinstance(config["secret"], str):
                     raise ValueError
             except (ValueError, TypeError, AttributeError):
-                self.add_error("configuration","Supply an HTTPS URL (HTTP is available on loopback) and a signing secret for a webhook.")
+                self.add_error("configuration","Supply an HTTPS URL (HTTP is available on loopback) and a text signing secret if desired.")
         return data
 
     def save(self, commit=True):

@@ -6,3 +6,6 @@ bcrypt>=4,<6
 cryptography>=44,<50
 pycurl>=7.45.4,<8
 PyYAML>=6,<7
+psutil>=6,<8
+regex>=2024.11.6
+uvicorn>=0.30,<1

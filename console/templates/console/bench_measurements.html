@@ -1,0 +1,32 @@
+{% load pulse_tags bench_charts %}
+{% if m.progress %}
+<section class="panel"><h2>Latency profile progress</h2><div class="table-wrap"><table><thead><tr><th>Profile</th><th>Completed iterations</th><th>Latest response</th></tr></thead><tbody>
+{% for p in m.progress %}<tr><td>{{ p.label }}</td><td>{{ p.done }} / {{ p.total }}</td><td>{% with row=p.last|last %}{% if row %}{{ row.1 }} ms · {{ row.2|default:"Transport error" }}{% else %}Waiting{% endif %}{% endwith %}</td></tr>{% endfor %}
+</tbody></table></div>{% for p in m.progress %}{% if p.last %}<details><summary>{{ p.label }} recent requests</summary><div class="table-wrap"><table><thead><tr><th>Iteration</th><th>Step</th><th>Status</th><th>Elapsed</th></tr></thead><tbody>{% for r in p.last %}<tr><td>{{ r.9.iteration }}</td><td>{{ r.3 }}</td><td>{{ r.2|default:"Transport error" }}</td><td>{{ r.1 }} ms</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}{% endfor %}</section>{% endif %}
+{% if m.generator %}
+<section class="panel"><h2>Load generator</h2><div class="meta">
+<span>Iterations <b>{{ m.iterations }}</b></span><span>Peak host CPU <b>{{ m.generator.host_cpu_peak_pct|decimal }}%</b></span>
+<span>Peak worker thread CPU <b>{{ m.generator.loop_cpu_peak_pct|decimal }}%</b></span><span>Largest event loop delay <b>{{ m.generator.loop_lag_peak_ms|decimal }} ms</b></span>
+{% if m.steady_rps != None %}<span>Steady throughput <b>{{ m.steady_rps }} req/s</b></span>{% endif %}
+<span>Sent <b>{{ m.sent|filesizeformat }}</b></span><span>Received <b>{{ m.received|filesizeformat }}</b></span></div>
+</section>
+{% elif m.host_cpu_pct != None %}<p class="meta">Host CPU {{ m.host_cpu_pct|decimal }}% · Event loop delay {{ m.loop_lag_ms|decimal }} ms</p>{% endif %}
+{% if run.series.0.host_cpu_pct != None %}<section class="panel"><div class="panel-head"><h2>Generator CPU over time</h2><span class="key">Host · <b style="color:#c8b4fa">Worker thread</b></span></div>{% bench_plot run.series 'cpu' %}
+<details><summary>Event loop wakeup delay</summary>{% bench_plot run.series 'scheduler_delay' %}</details></section>{% endif %}
+{% if m.stages %}
+<section class="panel"><h2>Load stages</h2>
+{% if m.max_sustainable %}<p>Highest passing stage: <strong>{{ m.max_sustainable.rps }} requests/s</strong> at target {{ m.max_sustainable.target }} on {{ m.max_sustainable.profile }}. Its p95 was {{ m.max_sustainable.p95|decimal }} ms.</p>{% endif %}
+{% if m.breakpoint.count != None %}<p>Breaking stage: {{ m.breakpoint.count }} requests · {{ m.breakpoint.rps }} req/s · p95 {{ m.breakpoint.p95|decimal }} ms · {{ m.breakpoint.error_pct }}% errors.</p>{% endif %}
+<div class="table-wrap"><table><thead><tr><th>Profile / stage</th><th>Target</th><th>Time</th><th>Requests</th><th>Req/s</th><th>p95</th><th>Errors</th><th>Result</th></tr></thead><tbody>{% for s in m.stages %}
+<tr><td>{{ s.profile }} · {{ s.stage }}</td><td>{{ s.target }}</td><td>{{ s.duration }} s</td><td>{{ s.count }}</td><td>{{ s.rps }}</td><td>{{ s.p95|decimal }} ms</td><td>{{ s.errors }}</td><td>{% if s.violation %}{{ s.violation }}{% elif s.passed %}Passed{% else %}Stopped{% endif %}</td></tr>{% endfor %}
+</tbody></table></div></section>{% endif %}
+{% if run.config.pattern == 'latency' and m.generator and m.profiles %}<section class="panel"><h2>Latency by request</h2>{% profile_timeline run.samples m.profiles %}</section>{% endif %}
+{% if m.generator and m.profiles %}
+<section class="panel"><h2>Transport by profile</h2><p class="muted">Response-time statistics use completed HTTP responses. Every attempted request contributes to the error rate.</p><div class="table-wrap"><table><thead><tr><th>Profile</th><th>Answered</th><th>Standard deviation</th><th>Reused connection</th><th>Compressed</th><th>Bytes received</th></tr></thead><tbody>{% for p in m.profiles %}<tr><td>{{ p.label }}</td><td>{{ p.answered }} / {{ p.count }}</td><td>{{ p.stddev|decimal }} ms</td><td>{{ p.reused }}</td><td>{{ p.compressed }}</td><td>{{ p.received|filesizeformat }}</td></tr>{% endfor %}</tbody></table></div>
+{% for p in m.profiles %}<details><summary>{{ p.label }} phase timings and latency buckets</summary>
+{% phase_bar p.phases %}<div class="meta">{% for phase,ms in p.phases.items %}<span>{{ phase|upper }} <b>{{ ms|decimal }} ms</b></span>{% endfor %}</div>
+<div class="table-wrap"><table><thead><tr><th>Latency bucket</th><th>Requests</th><th>Volume</th></tr></thead><tbody>{% for h in p.histogram %}<tr><td>{{ h.label }}</td><td>{{ h.count }}</td><td><meter min="0" max="100" value="{{ h.width }}">{{ h.width }}%</meter></td></tr>{% endfor %}</tbody></table></div>
+{% for k,v in p.failures.items %}<p>{{ k }} · {{ v }} request{{ v|pluralize }}</p>{% endfor %}</details>{% endfor %}</section>{% endif %}
+{% if m.checks %}<section class="panel"><h2>Release gate details</h2><div class="table-wrap"><table><thead><tr><th>Profile</th><th>Criterion</th><th>Limit</th><th>Measured</th><th>Result</th></tr></thead><tbody>
+{% for check in m.checks %}<tr><td>{{ check.profile|default:"Whole run" }}</td><td>{{ check.label }}</td><td>{{ check.limit }}</td><td>{{ check.actual|default_if_none:"No response" }}</td><td>{{ check.passed|yesno:"Passed,Failed" }}</td></tr>{% endfor %}
+</tbody></table></div></section>{% endif %}

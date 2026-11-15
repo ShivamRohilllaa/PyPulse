@@ -1,6 +1,8 @@
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.shortcuts import render
+from django.db.models.functions import Coalesce, NullIf
+from django.db.models import Value
 from django.views.decorators.http import require_GET
 
 from .models import Run
@@ -43,7 +45,7 @@ def trend(first, last, field):
 @require_GET
 def compare(request):
     finished = Run.objects.filter(finished__isnull=False)
-    options = finished.values("pk", "exercise__name").order_by("-pk")
+    options = finished.annotate(report_name=Coalesce(NullIf("name",Value("")),"exercise__name", Value("Unnamed"))).values("pk", "report_name").order_by("-pk")
     ids = [request.GET.get(key, "") for key in ("a", "b")]
     # Allow older reports to be selected from any history page by ID.
     picked = finished.select_related("exercise").in_bulk([int(i) for i in ids if i.isdecimal() and len(i) <= 18])

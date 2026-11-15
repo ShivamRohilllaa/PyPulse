@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import gzip
 import io
 import json
 import threading
@@ -22,6 +23,7 @@ class Benchmarks(TransactionTestCase):
     def setUp(self):
         observed=self.observed=[]
         class Endpoint(BaseHTTPRequestHandler):
+            protocol_version="HTTP/1.1"
             def do_GET(req):
                 path=urlsplit(req.path)
                 observed.append((path.path,req.headers.get("X-Session")))
@@ -30,10 +32,13 @@ class Benchmarks(TransactionTestCase):
                     code,body=200,json.dumps({"item":{"id":item}}).encode()
                 elif path.path.startswith("/items/"):
                     code,body=200,b"ok"
+                elif path.path=="/compressed":
+                    code,body=200,gzip.compress(b"product=42")
                 elif path.path=="/redirect":
                     code,body=302,b""
                 else: code,body=503,b"no"
                 req.send_response(code)
+                if path.path=="/compressed": req.send_header("Content-Encoding","gzip")
                 if code==302: req.send_header("Location","/items/should-never-be-read")
                 req.send_header("X-Session","live-secret-not-in-samples")
                 req.send_header("Content-Length",str(len(body)))
@@ -72,7 +77,7 @@ class Benchmarks(TransactionTestCase):
         self.assertGreater(run.result["profiles"][1]["mean"],run.result["profiles"][0]["mean"]+45)
         self.assertEqual(sum(h["count"] for h in run.result["histogram"]),8)
         self.assertEqual(set(run.result["phases"]),{"dns","tcp","tls","ttfb","download"})
-        self.assertEqual([p for p in self.observed if p[0].startswith("/items")],
+        self.assertCountEqual([p for p in self.observed if p[0].startswith("/items")],
             [("/items/fruit-27","live-secret-not-in-samples"),("/items/fruit-61","live-secret-not-in-samples")]*2)
         self.client.force_login(get_user_model().objects.create_user("reader"))
         report=self.client.get(f"/runs/{run.pk}");self.assertContains(report,"Network profile comparison")
@@ -166,6 +171,128 @@ class Benchmarks(TransactionTestCase):
         cfg={"rate":4,"pattern":"stress","max_p95":0,"max_error_pct":0,"seconds":3}
         opts=validate_options({"plateau_windows":1},self.url)
         driver=Driver(SimpleNamespace(pk=1,config=cfg),{"url":self.url,"steps":[],"options":opts,"profiles":[DIRECT]}, {})
-        for level in (1,2,3):
-            driver.assess({"count":5,"errors":0,"error_pct":0,"p95":8},level)
-        self.assertEqual(driver.breakpoint,{"reason":"Throughput plateau","target":2,"profile":"Direct"})
+        driver.stage_level=2
+        driver.best={"target":1,"rps":5}
+        stats={"count":5,"answered":5,"errors":0,"error_pct":0,"rps":5,"p95":8}
+        self.assertEqual(driver.stage_violation(stats,final=True),"Throughput plateau")
+
+    def test_compression_connection_reuse_and_regex_extraction(self):
+        from .benchconfig import statuses
+        self.assertEqual(statuses("2XX, 304, 500 - 501"),[*range(200,300),304,500,501])
+        test = self.exercise(options={"count":2, "steps":[
+            {"name":"Product", "url":self.url+"/compressed", "extract":{"product":"regex:product=(\\d+)"}},
+            {"name":"Detail", "url":self.url+"/items/{{product}}"}]})
+        run = self.run_case(test)
+        self.assertTrue(run.result["passed"], run.result["gate_reasons"])
+        self.assertEqual(run.result["profiles"][0]["compressed"],2)
+        self.assertGreaterEqual(run.result["profiles"][0]["reused"],2)
+        self.assertEqual([path for path,_ in self.observed],["/compressed","/items/42"]*2)
+        with self.assertRaises(ValidationError):
+            validate_options({"steps":[{"extract":{"value":"regex:["}}]},self.url)
+
+    def test_parallel_latency_profiles_each_get_their_own_gate(self):
+        fast = NetworkProfile.objects.create(name="Fast test")
+        slow = NetworkProfile.objects.create(name="Slow test")
+        options={"count":1,"profiles":[fast.pk,slow.pk],"max_avg_ms":60,"max_p99_ms":95}
+        barrier = threading.Barrier(2, timeout=3)
+        def request(_spec, _values, profile, **kwargs):
+            barrier.wait()
+            return dict(status=200, ms=80 if profile["name"]==slow.name else 10, sent=0, received=5,
+                        error="", phases={"dns":1}, body=b"", headers={}, reused=False, compressed=False)
+        with patch("console.benchrunner.probe", request):
+            run = self.run_case(self.exercise(options=options))
+        self.assertEqual(run.result["mean"],45)
+        self.assertEqual([(c["profile"], c["label"]) for c in run.result["checks"] if not c["passed"]],
+                         [(slow.name, "Mean latency (ms)")])
+        self.assertFalse(run.result["passed"])
+        self.assertEqual(run.result["answered"],2)
+        self.assertEqual(run.result["stddev"],35)
+
+    def test_transport_failures_do_not_mask_slow_answered_requests(self):
+        from .benchstats import full_report
+        rows = [[0,13,200,"Step","Direct","",{"dns":1},0,10,{"answered":True}],
+                [.1,5000,0,"Step","Direct","Timeout",{},0,0,{"answered":False}],
+                [.2,120,503,"Step","Direct","HTTP 503",{"dns":2},0,4,{"answered":True}]]
+        result = full_report(rows, 2, 0, [], {"Direct":2})
+        self.assertEqual((result["count"],result["answered"],result["p95"],result["errors"]),(3,2,120,2))
+        self.assertEqual(result["profiles"][0]["phases"]["dns"],1.5)
+        self.assertEqual(sum(h["count"] for h in result["histogram"]),2)
+
+    def test_shaped_workloads_and_passing_stress_stage(self):
+        from .benchstats import stage_plan
+        cfg = {"pattern":"spike","seconds":30,"rate":6}
+        opts = validate_options({"base_load":2,"base_seconds":3,"peak_seconds":5,"recovery_seconds":2},self.url)
+        self.assertEqual(stage_plan(cfg,opts),[{"target":2,"seconds":3},{"target":6,"seconds":5},{"target":2,"seconds":2}])
+        cfg["pattern"]="ramp"
+        opts = validate_options({"start_load":1,"step_size":2,"stage_seconds":3,"hold_seconds":4},self.url)
+        self.assertEqual([s["seconds"] for s in stage_plan(cfg,opts)],[3,3,3,4])
+        options={"stress_policy":"independent","stop_error_pct":10,"stages":[{"seconds":1,"target":5},{"seconds":1,"target":25}]}
+        sent=0
+        def request(_spec, _values, _profile, **kwargs):
+            nonlocal sent
+            sent+=1
+            return dict(status=200 if sent<=5 else 503, ms=11, sent=0, received=5,
+                        error="", phases={}, body=b"", headers={}, reused=False,compressed=False)
+        with patch("console.benchrunner.probe",request):
+            run=self.run_case(self.exercise(pattern="stress",rate=25,seconds=2,options=options))
+        self.assertEqual(run.state,"Threshold reached")
+        self.assertEqual(run.result["max_sustainable"]["target"],5)
+        self.assertEqual(run.result["breakpoint"]["target"],25)
+        self.assertEqual(run.result["breakpoint"]["error_pct"],100)
+        self.assertEqual([s["count"] for s in run.result["stages"]],[5,25])
+        self.assertEqual(run.result["iterations"],30)
+        self.assertEqual(sum(t["count"] for t in run.series),30)
+        self.assertIn("host_cpu_peak_pct", run.result["generator"])
+        self.assertTrue(all("loop_lag_ms" in tick for tick in run.series))
+
+    def test_measurements_only_and_display_snapshot_do_not_expose_request_data(self):
+        raw_fixture = "keep-this-fixture-private"
+        test = self.exercise(url=self.url+"/unhealthy", options={"gate_policy":"measure",
+            "statuses":"2xx, 304", "csv_data":"region\n"+raw_fixture,
+            "steps":[{"name":"Availability","url":self.url+"/unhealthy?region={{region}}",
+                      "headers":{"X-Client":"private-header-value"}}]})
+        run = self.run_case(test)
+        self.assertIsNone(run.result["passed"])
+        self.assertEqual(run.result["checks"],[])
+        self.assertEqual(run.config["settings"]["statuses"],"200–299, 304")
+        self.assertEqual(run.config["settings"]["steps"],[{"name":"Availability","method":"GET"}])
+        safe = json.dumps(run.config["settings"])
+        for value in (raw_fixture,"region","private-header-value",self.url):
+            self.assertNotIn(value,safe)
+
+    def test_json_bracket_extraction_matches_request_editor(self):
+        from .benchrunner import extract
+        item={"body":b'{"items":[{"id":"42"}]}', "headers":{}}
+        self.assertEqual(extract({"id":"json:$.items[0].id","item":"json:items.0"},item),
+                         {"id":"42","item":'{"id":"42"}'})
+
+    def test_dynamic_placeholders_share_one_request_scope(self):
+        import uuid
+        from datetime import datetime, timezone
+        from .probes import _prepare
+        spec={"url":self.url+"/items/{{$uuid}}","method":"POST",
+              "headers":{"X-Request":"{{ $uuid }}","X-Second":"{{$timestamp}}","X-Random":"{{$randomInt}}"},
+              "query":{"ms":"{{$timestampMs}}","iso":"{{$isoTimestamp}}","again":"{{$uuid}}"},
+              "auth":{"type":"bearer","token":"{{$uuid}}"},
+              "body":{"request":"{{$uuid}}","number":"{{$randomInt}}","input":"{{text}}"}}
+        variables={"text":'Hello "world"\n', "$uuid":"cannot-override-builtins"}
+        with patch("console.probes.time.time_ns",return_value=1700000000123000000):
+            url,method,headers,raw=_prepare(spec,variables,True)
+        parts=urlsplit(url)
+        uid=parts.path.split("/")[-1]
+        self.assertEqual(uuid.UUID(uid).version,4)
+        query=parse_qs(parts.query)
+        self.assertEqual(headers["Authorization"],"Bearer "+uid)
+        self.assertEqual((headers["X-Request"],query["again"][0]),(uid,uid))
+        self.assertEqual(json.loads(raw),{"request":uid,"number":headers["X-Random"],"input":variables["text"]})
+        self.assertTrue(0<=int(headers["X-Random"])<1000000)
+        self.assertEqual((headers["X-Second"], query["ms"]),("1700000000",["1700000000123"]))
+        self.assertEqual(query["iso"],["2023-11-14T22:13:20.123Z"])
+        self.assertNotEqual(_prepare(spec,variables,True)[2]["X-Request"],uid)
+        self.assertTrue(validate_options({"steps":[spec]},self.url))
+        for invalid in ("{{$unknown}}","{{$uuid","{{ $uuid:4 }}"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                validate_options({"steps":[{"query":{"v":invalid}}]},self.url)
+        form_spec=validate_options({"steps":[{"method":"POST","form":{"id":"{{$uuid}}","copy":"{{$uuid}}"}}]},self.url)["steps"][0]
+        fields=parse_qs(_prepare(form_spec,{},True)[3].decode())
+        self.assertEqual(fields["id"],fields["copy"])

@@ -1,12 +1,14 @@
 import json
 from functools import wraps
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 from .workspace_ci import ci
 from .forms import ServiceForm
-from .models import Audit, Service
+from .audit import record
+from .models import Service
 from .telemetry import digest, issue_token, summary
 
 
@@ -31,7 +33,10 @@ def services(request):
     if not request.user.has_perm("console.add_service"):
         return JsonResponse({"error":"Permission required"},status=403)
     try:
-        form=ServiceForm(json.loads(request.body))
+        data = json.loads(request.body)
+        if not isinstance(data, dict):
+            raise ValueError
+        form = ServiceForm(data)
     except (ValueError,TypeError):
         return JsonResponse({"error":"Invalid JSON"},status=400)
     if not form.is_valid():
@@ -39,8 +44,12 @@ def services(request):
     token=issue_token()
     service=form.save(commit=False)
     service.token_hash=digest(token)
-    service.save()
-    Audit.objects.create(actor=request.user.get_username(),action="Connected "+service.name)
+    try:
+        with transaction.atomic():
+            service.save()
+            record(request, "Connected Python service", service, details={"name":service.name, "framework":service.framework})
+    except IntegrityError:
+        return JsonResponse({"error":"A service with that name already exists."}, status=409)
     return JsonResponse({"service":summary(service),"token":token},status=201)
 
 @account("change_service")
@@ -48,12 +57,17 @@ def services(request):
 def goal(request,pk):
     item=get_object_or_404(Service,pk=pk)
     try:
-        target=float(json.loads(request.body)["target"])
+        raw = json.loads(request.body)["target"]
+        if isinstance(raw, bool):
+            raise ValueError
+        target = float(raw)
         if not 1<=target<=99.999: raise ValueError
     except (ValueError,KeyError,TypeError):
         return JsonResponse({"error":"Use a target between 1 and 99.999"},status=400)
     item.target=target
-    item.save(update_fields=["target"])
+    with transaction.atomic():
+        item.save(update_fields=["target"])
+        record(request, "Updated service availability target", item, details={"target": target})
     return JsonResponse(summary(item))
 
 @never_cache
@@ -63,11 +77,16 @@ def rotate(request,pk):
     item=get_object_or_404(Service,pk=pk)
     token=issue_token()
     item.token_hash=digest(token)
-    item.save(update_fields=["token_hash"])
+    with transaction.atomic():
+        item.save(update_fields=["token_hash"])
+        record(request, "Rotated service ingest token", item)
     return JsonResponse({"token":token,"service":summary(item)})
 
 @account("delete_service")
 @require_http_methods(["DELETE"])
 def remove(request,pk):
-    get_object_or_404(Service,pk=pk).delete()
+    with transaction.atomic():
+        item = get_object_or_404(Service, pk=pk)
+        record(request, "Removed Python service", item, details={"name": item.name})
+        item.delete()
     return JsonResponse({"deleted":True})

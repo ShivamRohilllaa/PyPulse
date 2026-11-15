@@ -7,5 +7,6 @@ from .uptime_engine import check_monitor, notify
 __all__ = ["benchmark", "check_monitor", "enqueue", "notify", "pace", "quantile", "summarize"]
 
 
-def enqueue(exercise):
-    return Run.objects.create(exercise=exercise, config=freeze(exercise))
+def enqueue(exercise, *, trigger="manual", actor="", saved=True):
+    return Run.objects.create(exercise=exercise if saved else None, name=exercise.name,
+                              trigger=trigger, actor=actor, config=freeze(exercise))

@@ -5,6 +5,9 @@ import json
 import random
 import re
 import threading
+import secrets
+import uuid
+from datetime import datetime, timezone
 import time
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -16,7 +19,9 @@ from django.db.models import Q
 
 from .models import Variable
 
-_TEMPLATE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
+_TEMPLATE = re.compile(r"{{\s*(\$?[A-Za-z_][A-Za-z0-9_]*)\s*}}")
+_DYNAMIC_START = re.compile(r"{{\s*\$")
+_DYNAMIC_NAMES = {"$timestamp", "$timestampMs", "$isoTimestamp", "$uuid", "$randomInt"}
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 _LOCAL = threading.local()
 _PHASES = ("dns", "tcp", "tls", "ttfb", "download")
@@ -43,13 +48,62 @@ def workspace_variables(environment=""):
     return {row.name: row.reveal() for row in rows.order_by("environment", "pk")}
 
 
-def interpolate(value, variables):
+def validate_dynamic_placeholders(value):
+    """Check reserved placeholders without resolving secrets, fixtures or extraction names."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+        elif isinstance(item, str):
+            for start in _DYNAMIC_START.finditer(item):
+                token = _TEMPLATE.match(item, start.start())
+                if not token or token.group(1) not in _DYNAMIC_NAMES:
+                    raise ValidationError("Unknown or malformed dynamic placeholder. Use $timestamp, $timestampMs, $isoTimestamp, $uuid or $randomInt.")
+
+
+class _RequestVariables:
+    def __init__(self, variables):
+        self.variables = variables
+        self.generated = {}
+        self.timestamp_ms = time.time_ns() // 1_000_000
+
+    def resolve(self, name):
+        if not name.startswith("$"):
+            if name not in self.variables:
+                raise ValidationError("Missing variable: %(name)s", params={"name": name})
+            return str(self.variables[name])
+        if name not in self.generated:
+            if name == "$timestamp":
+                value = str(self.timestamp_ms // 1000)
+            elif name == "$timestampMs":
+                value = str(self.timestamp_ms)
+            elif name == "$isoTimestamp":
+                utc = datetime.fromtimestamp(self.timestamp_ms / 1000, tz=timezone.utc)
+                value = utc.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            elif name == "$uuid":
+                value = str(uuid.uuid4())
+            elif name == "$randomInt":
+                value = str(secrets.randbelow(1_000_000))
+            else:
+                raise ValidationError("Unknown dynamic placeholder.")
+            self.generated[name] = value
+        return self.generated[name]
+
+
+def interpolate(value, variables, *, json_string=False):
+    text = str(value)
+    if "{{" not in text:
+        return text
+    validate_dynamic_placeholders(text)
+    scope = variables if isinstance(variables, _RequestVariables) else _RequestVariables(variables)
     def substitute(match):
-        name = match.group(1)
-        if name not in variables:
-            raise ValidationError("Missing variable: %(name)s", params={"name": name})
-        return str(variables[name])
-    return _TEMPLATE.sub(substitute, str(value))
+        replacement = scope.resolve(match.group(1))
+        return json.dumps(replacement)[1:-1] if json_string else replacement
+    return _TEMPLATE.sub(substitute, text)
 
 
 def http_url(value):
@@ -96,6 +150,7 @@ def approved_url(value, allowed=False):
 
 
 def _prepare(spec, variables, allowed):
+    variables = _RequestVariables(variables)
     url = approved_url(interpolate(spec["url"], variables), allowed)
     parsed = urlsplit(url)
     query = [(interpolate(k, variables), interpolate(v, variables)) for k, v in (spec.get("query") or {}).items()]
@@ -117,8 +172,15 @@ def _prepare(spec, variables, allowed):
     elif kind != "none":
         raise ValidationError("Unknown authentication type.")
     body = spec.get("body")
-    if isinstance(body, (list, dict)):
-        body = json.dumps(body)
+    prepared_body = "form" in spec or isinstance(body, (list, dict))
+    if "form" in spec:
+        if body is not None or not isinstance(spec["form"], dict):
+            raise ValidationError("Choose either form fields or a request body.")
+        body = urlencode([(interpolate(k, variables), interpolate(v, variables)) for k,v in spec["form"].items()])
+        if not any(name.lower() == "content-type" for name in headers):
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif isinstance(body, (list, dict)):
+        body = interpolate(json.dumps(body), variables, json_string=True)
         if not any(name.lower()=="content-type" for name in headers):
             headers["Content-Type"] = "application/json"
     method = str(spec.get("method","GET")).upper()
@@ -132,7 +194,7 @@ def _prepare(spec, variables, allowed):
     if query:
         url = urlunsplit(parsed._replace(query="&".join(filter(None, (parsed.query, urlencode(query))))))
     return (url,method,headers,
-            interpolate(body,variables).encode() if body is not None else b"")
+            (body.encode() if prepared_body else interpolate(body,variables).encode()) if body is not None else b"")
 
 
 def _cancelled(cancel):
@@ -154,7 +216,7 @@ def probe(spec, variables=None, profile=None, *, timeout_ms=5000, keep_alive=Tru
     """Measure one request. Never persist query strings, response bodies or expanded credentials."""
     variables = variables or {}
     profile = profile or {}
-    result = dict(status=0, ms=0., sent=0, received=0, error="", body=b"", headers={},
+    result = dict(status=0, ms=0., sent=0, received=0, error="", body=b"", headers={}, reused=None, compressed=None,
                   phases=dict.fromkeys(_PHASES, 0.))
     started = time.perf_counter()
     deadline = started + max(.05, min(300., timeout_ms/1000))
@@ -205,6 +267,11 @@ def probe(spec, variables=None, profile=None, *, timeout_ms=5000, keep_alive=Tru
         handle.setopt(pycurl.TIMEOUT_MS, max(1,int((deadline-time.perf_counter())*1000)))
         handle.setopt(pycurl.FRESH_CONNECT, not keep_alive)
         handle.setopt(pycurl.FORBID_REUSE, not keep_alive)
+        if spec.get("ignore_tls") is True:
+            handle.setopt(pycurl.SSL_VERIFYPEER, False)
+            handle.setopt(pycurl.SSL_VERIFYHOST, 0)
+        if spec.get("compression") is True:
+            handle.setopt(pycurl.ACCEPT_ENCODING, "")
         handle.setopt(pycurl.WRITEFUNCTION, capture)
         handle.setopt(pycurl.HEADERFUNCTION, header)
         if cancel:
@@ -226,6 +293,10 @@ def probe(spec, variables=None, profile=None, *, timeout_ms=5000, keep_alive=Tru
         handle.perform()
         result["status"] = handle.getinfo(pycurl.RESPONSE_CODE)
         result["sent"] = int(handle.getinfo(pycurl.SIZE_UPLOAD_T))
+        result["received"] = int(handle.getinfo(pycurl.SIZE_DOWNLOAD_T))
+        result["reused"] = handle.getinfo(pycurl.NUM_CONNECTS) == 0
+        encoding = result["headers"].get("content-encoding", "").lower().strip()
+        result["compressed"] = bool(encoding and encoding != "identity")
         up_floor = result["sent"]/up if up else 0
         down_floor = result["received"]/down if down else 0
         wire = time.perf_counter()-wire_start

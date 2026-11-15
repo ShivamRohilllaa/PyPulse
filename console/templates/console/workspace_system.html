@@ -1,0 +1,6 @@
+{% extends "console/workspace_page.html" %}{% block heading %}System{% endblock %}{% block body %}
+<div class="stats"><div><span>System CPU</span><strong>{{ system.cpuPercent }}%</strong><small>{{ system.cpuCount }} logical cores</small></div>
+<div><span>Web process memory</span><strong>{{ system.memoryMb }} <small>MiB</small></strong></div><div><span>Scheduled monitors</span><strong>{{ system.scheduled }}<small> / {{ system.monitors }}</small></strong></div>
+<div><span>Running tests</span><strong>{{ system.activeRuns }}</strong><small>{{ system.queuedRuns }} queued</small></div></div>
+<section class="panel"><h2>Runtime</h2><p>Python {{ system.python }} · Django {{ system.django }}{% if system.agentVersion %} · Python agent {{ system.agentVersion }}{% endif %}</p><p>Web process uptime {{ system.uptimeSec }} seconds · {{ system.scheduledTests }} scheduled tests</p>
+{% if system.dataDir %}<p>Backup directory <code>{{ system.dataDir }}</code></p>{% endif %}</section>{% endblock %}

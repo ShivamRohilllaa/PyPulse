@@ -1,0 +1,1 @@
+{% extends "console/base.html" %}{% block content %}<section class="login panel"><h1>Create administrator</h1><p>This account manages the workspace and invites the team.</p><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary">Create workspace</button></form></section>{% endblock %}

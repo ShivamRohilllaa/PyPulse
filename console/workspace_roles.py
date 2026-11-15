@@ -12,6 +12,13 @@ def role_of(member):
     return "viewer"
 
 
+def editor_group():
+    group, _ = Group.objects.get_or_create(name="PyPulse Editors")
+    models = ("monitor", "maintenance", "incident", "exercise", "run", "networkprofile", "variable")
+    group.permissions.set(Permission.objects.filter(content_type__app_label="console", content_type__model__in=models))
+    return group
+
+
 def apply_role(member, role, active):
     if member.pk and member.is_superuser and member.is_active and (role != "admin" or not active):
         if not User.objects.filter(is_superuser=True, is_active=True).exclude(pk=member.pk).exists():
@@ -19,11 +26,20 @@ def apply_role(member, role, active):
     member.is_active = active
     member.is_superuser = member.is_staff = role == "admin"
     member.save()
-    group, _ = Group.objects.get_or_create(name="PyPulse Editors")
     if role == "editor":
-        # Editors manage test inputs and observations. Workspace access and outgoing alert credentials stay admin-only.
-        models = ("monitor", "maintenance", "incident", "exercise", "run")
-        group.permissions.set(Permission.objects.filter(content_type__app_label="console", content_type__model__in=models))
-        member.groups.add(group)
+        member.groups.add(editor_group())
     else:
-        member.groups.remove(group)
+        member.groups.remove(*Group.objects.filter(name="PyPulse Editors"))
+
+
+def update_access(actor, member, role, active):
+    if actor.pk == member.pk and (role != "admin" or not active):
+        raise ValueError("You cannot demote or disable your own account.")
+    disabling = member.is_active and not active
+    apply_role(member, role, active)
+    if disabling:
+        from django.contrib.sessions.models import Session
+        from django.utils import timezone
+        for session in Session.objects.filter(expire_date__gt=timezone.now()).iterator():
+            if session.get_decoded().get("_auth_user_id") == str(member.pk):
+                session.delete()

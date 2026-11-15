@@ -247,7 +247,9 @@ class UptimeTests(TestCase):
         self.assertContains(page,"Alpha")
         self.assertContains(page,"Beta")
         self.assertContains(page,"Active")
-        self.assertContains(Client().get(reverse("status")),"Scheduled maintenance",count=2)
+        public=Client().get(reverse("status"))
+        self.assertEqual(public.context["summary"],"Scheduled maintenance")
+        self.assertEqual(sum(m.maintenance_active for m in public.context["monitors"]),2)
         self.assertEqual(self.client.post(location,{**data,"targets":[a.pk],"all_monitors":"on"}).status_code,400)
         self.assertEqual(self.client.post(location,data).status_code,400)
         self.assertEqual(self.client.post(location,{**data,"name":"Platform update","all_monitors":"on"}).status_code,302)
@@ -324,3 +326,112 @@ class UptimeTests(TestCase):
             self.assertEqual(probe.call_args.kwargs["timeout_ms"],600)
         self.assertFalse(Monitor.objects.exists())
         self.assertFalse(Check.objects.exists())
+
+    def test_json_rule_comparators_form_payload_and_sealed_edits(self):
+        options={"auth":{"type":"bearer","token":"old-token"},"form":{"key":"value"},
+                 "json_checks":[{"path":"rows[0].value","op":"contains","value":"ell"},
+                                {"path":"rows.0.enabled","op":"equals","value":"true"},{"path":"rows","op":"exists"},
+                                {"path":"rows[0].type","op":"not_equals","value":"basic"}]}
+        data=self.monitor_data(status_expression="2xx, 301, 400 - 403",options=json.dumps(options))
+        self.assertEqual(self.client.post(reverse("new_monitor"),data).status_code,302)
+        monitor=Monitor.objects.get()
+        result={"status":402,"ms":30,"error":"","headers":{},"body":b'{"rows":[{"value":"hello","enabled":true}]}'}
+        with patch("console.uptime_engine.probes.probe",return_value=result) as probe:
+            check_monitor(monitor.pk)
+            self.assertTrue(Check.objects.get().ok)
+            self.assertEqual(probe.call_args.args[0]["form"],{"key":"value"})
+            result["body"]=b'{"rows":[{"value":"hello","enabled":true,"type":"basic"}]}'
+            check_monitor(monitor.pk)
+            self.assertEqual(Check.objects.latest("pk").reason,"JSON exclusion failed")
+        data.update(options=json.dumps({"form":None,"ignore_tls":True}),options_patch="1")
+        self.assertEqual(self.client.post(reverse("edit_monitor",args=[monitor.pk]),data).status_code,302)
+        monitor.refresh_from_db()
+        self.assertNotIn("form",request_options(monitor))
+        self.assertTrue(request_options(monitor)["ignore_tls"])
+        self.assertEqual(request_options(monitor)["auth"]["token"],"old-token")
+
+    def test_slow_incident_resolution_and_escalation_destinations(self):
+        monitor=Monitor.objects.create(name="Test",url="https://example.org",warn_ms=10,failure_threshold=1)
+        a,b=[AlertChannel.objects.create(name=n,kind="slack",config_secret=seal("{}")) for n in ("Amber","Blue")]
+        monitor.escalation_channels.add(a,b)
+        result={"status":200,"error":"","ms":20,"headers":{},"body":b""}
+        with patch("console.uptime_engine.probes.probe",return_value=result):
+            check_monitor(monitor.pk)
+            slow=Incident.objects.get()
+            self.assertEqual(slow.kind,"Slow")
+            Incident.objects.filter(pk=slow.pk).update(next_escalation=timezone.now())
+            queue_followups(timezone.now())
+            self.assertEqual(set(AlertDelivery.objects.filter(event="Escalation").values_list("channel_id",flat=True)),{a.pk,b.pk})
+            self.assertContains(self.client.get(reverse("incident_detail",args=[slow.pk])),"Escalation")
+            result["status"]=500
+            check_monitor(monitor.pk)
+            slow.refresh_from_db()
+            self.assertIsNotNone(slow.closed)
+            down=Incident.objects.get(closed=None)
+            self.assertEqual(down.kind,"Down")
+            self.client.post(reverse("resolve",args=[down.pk]))
+            check_monitor(monitor.pk)
+            down.refresh_from_db()
+            self.assertEqual(down.resolved_by,"owner")
+            self.assertFalse(Incident.objects.filter(closed=None).exists())
+
+    def test_historical_and_public_quantiles_availability(self):
+        now=timezone.now()
+        m=Monitor.objects.create(name="Catalog",url="https://secret.example.org",public=True,state="Down")
+        for n in range(1,21):
+            Check.objects.create(monitor=m,at=now-timedelta(minutes=1),ms=n,ok=True)
+        old=(now-timedelta(days=45)).replace(minute=0,second=0,microsecond=0)
+        CheckHour.objects.create(monitor=m,hour=old,total=20,passed=10,elapsed_sum_ms=2000,min_ms=100,max_ms=100,latency_histogram={"100":20})
+        Incident.objects.create(monitor=m,reason="Private details")
+        ctx=measurement_context(m,"90d")
+        self.assertEqual((ctx["coverage"],ctx["p95"],ctx["p99"],ctx["availability"]),(40,100,100,75))
+        self.assertEqual([b["p95"] for b in ctx["series"] if b["count"]],[100,19])
+        public=Client().get("/api/public/status")
+        self.assertNotContains(public,"secret.example.org")
+        self.assertNotContains(public,"Private details")
+        service=public.json()["monitors"][0]
+        self.assertEqual((len(service["days"]),service["uptime90d"]),(90,75))
+        self.assertEqual(public.json()["incidents"][0]["kind"],"Down")
+
+    def test_rest_monitor_channel_incident_and_maintenance(self):
+        create=self.client.post("/api/monitors",{"name":"Billing","url":"https://example.org/health",
+            "options":{"auth":{"type":"bearer","token":"sample-secret"}}},content_type="application/json")
+        self.assertEqual(create.status_code,201,create.content)
+        pk=create.json()["id"]
+        endpoint=f"/api/monitors/{pk}"
+        self.assertNotContains(self.client.get(endpoint),"sample-secret")
+        resp=self.client.patch(endpoint,{"warn_ms":70},content_type="application/json")
+        self.assertEqual(resp.status_code,200,resp.content)
+        self.assertEqual(request_options(Monitor.objects.get(pk=pk))["auth"]["token"],"sample-secret")
+        self.assertEqual(self.client.post(endpoint+"/check").status_code,202)
+        self.assertTrue(self.client.post(endpoint+"/clone").json()["paused"])
+        self.assertTrue(self.client.post(endpoint+"/pause").json()["paused"])
+        self.assertEqual(self.client.post(endpoint+"/check").status_code,409)
+        self.assertFalse(self.client.post(endpoint+"/resume").json()["paused"])
+        Check.objects.create(monitor_id=pk,ms=40,status=503,ok=False)
+        issue=Incident.objects.create(monitor_id=pk)
+        self.assertEqual(self.client.get(endpoint+"/checks?result=issues").json()["total"],1)
+        self.assertEqual(self.client.get(endpoint+"/stats").json()["p95"],40)
+        self.assertEqual(self.client.get(endpoint+"/alerts").json()["total"],1)
+        self.assertTrue(self.client.post(f"/api/alerts/{issue.pk}/ack").json()["acknowledged"])
+        self.assertEqual(self.client.post(f"/api/alerts/{issue.pk}/resolve").json()["resolved_by"],"owner")
+        channel=self.client.post("/api/channels",{"name":"Demo","kind":"webhook","enabled":True,
+            "configuration":{"url":"http://127.0.0.1/test","headers":{"X-Custom":"private-header"}}},content_type="application/json")
+        self.assertEqual(channel.status_code,201,channel.content)
+        channel_url="/api/channels/"+str(channel.json()["id"])
+        self.assertNotContains(self.client.get(channel_url),"private-header")
+        self.assertEqual(self.client.post(channel_url+"/test").status_code,202)
+        window=self.client.post("/api/maintenance",{"name":"Deploy","all_monitors":True,"start":"2026-11-15T01:00:00Z",
+                 "end":"2026-11-15T02:00:00Z","recurrence":"daily"},content_type="application/json")
+        self.assertEqual(window.status_code,201,window.content)
+        url="/api/maintenance/"+str(window.json()["id"])
+        self.assertEqual(self.client.patch(url,{"name":"Deploy v2"},content_type="application/json").json()["name"],"Deploy v2")
+        self.assertEqual(self.client.delete(url).status_code,200)
+        self.assertEqual(self.client.delete(channel_url).status_code,200)
+        self.client.force_login(self.reader)
+        self.assertEqual(self.client.get(endpoint).status_code,200)
+        self.assertEqual(self.client.post(endpoint+"/clone").status_code,403)
+        self.assertEqual(Client().get("/api/monitors").status_code,401)
+        client=Client(enforce_csrf_checks=True)
+        client.force_login(self.owner)
+        self.assertEqual(client.delete(endpoint).status_code,403)

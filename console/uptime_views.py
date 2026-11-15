@@ -18,6 +18,9 @@ from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .models import AlertChannel, AlertDelivery, Audit, Check, Incident, Maintenance, Monitor
+from .audit import record
+from .latency_buckets import quantile
+from .uptime_history import history_charts, public_days
 from .uptime_engine import in_maintenance, measure_monitor, occurrence
 from .uptime_forms import ChannelForm, MaintenanceForm, MonitorForm, SharedMaintenanceForm
 
@@ -27,8 +30,22 @@ def require_permission(request, code):
         raise PermissionDenied
 
 
-def audit(request, message):
-    Audit.objects.create(actor=request.user.get_username(), action=message[:200])
+def audit(request, message, obj=None):
+    record(request, message, obj)
+
+
+def display_endpoint(value):
+    if "{{" in value:
+        return value.split("?")[0].split("#")[0]
+    parts = urlsplit(value)
+    return f"{parts.scheme}://{parts.netloc.split('@')[-1]}{parts.path}"
+
+
+def latest_checks(rows):
+    latest = Check.objects.filter(monitor_id=OuterRef("pk")).order_by("-at","-pk")
+    return rows.annotate(last_check=Subquery(latest.values("at")[:1]),
+                         last_ms=Subquery(latest.values("ms")[:1]),
+                         last_reason=Subquery(latest.values("reason")[:1]))
 
 
 def list_stats(rows):
@@ -61,39 +78,23 @@ def measurement_context(monitor, period, check_filter="all", page=None):
         return next(iter(checks.order_by("ms").values_list("ms", flat=True)[offset:offset+1]), None)
     p95, p99 = percentile(.95), percentile(.99)
     rolled = monitor.hours.filter(hour__gte=start,hour__lt=now).order_by("hour")
-    slow_count = sum(row["slow"] for row in raw)
-    buckets = {}
-    passed, count, total_ms = 0, 0, 0
-    def include(at, n, successes, elapsed):
-        nonlocal passed, count, total_ms
-        bucket = int(at.timestamp()) // width
-        old_n, old_ms = buckets.get(bucket, (0,0))
-        buckets[bucket] = (old_n + n, old_ms + elapsed)
-        passed, count, total_ms = passed + successes, count + n, total_ms + elapsed
-    for row in raw:
-        include(row["bucket"],row["n"],row["passed"],row["elapsed"])
-    for row in rolled:
-        include(row.hour,row.total,row.passed,row.elapsed_sum_ms)
-        slow_count += row.slow_count
-    origin = int(start.timestamp()) // width
-    stop = int(now.timestamp()) // width
-    means = {bucket: elapsed/n for bucket,(n,elapsed) in buckets.items() if n}
-    peak = max(means.values(), default=0)
-    segments, points, previous = [], [], None
-    for bucket, ms in sorted(means.items()):
-        x = round(1000 * (bucket - origin) / max(1, stop-origin), 2)
-        y = round(95 - 90 * ms / max(peak, 1), 2)
-        if previous is None or bucket != previous + 1:
-            segments.append([])
-        segments[-1].append(f"{x},{y}")
-        points.append((x, y))
-        previous = bucket
+    rolled = list(rolled)
+    slow_count = sum(r["slow"] for r in raw) + sum(r.slow_count for r in rolled)
+    count = raw_count + sum(r.total for r in rolled)
+    passed = sum(r["passed"] for r in raw) + sum(r.passed for r in rolled)
+    total_ms = sum(r["elapsed"] for r in raw) + sum(r.elapsed_sum_ms for r in rolled)
+    chart = history_charts(checks,raw,rolled,start,now,trunc,width)
+    mixed = chart.pop("merged_histogram")
+    coverage = raw_count
+    if mixed:
+        p95, p99 = quantile(mixed,.95), quantile(mixed,.99)
+        coverage = sum(mixed.values())
     filters = {"failed": Q(ok=False), "slow": Q(slow=True), "issues": Q(ok=False) | Q(slow=True)}
     history = checks.filter(filters[check_filter]) if check_filter in filters else checks
     history_page = Paginator(history.order_by("-at","-pk"), 25).get_page(page)
-    return {"period": period, "periods": RANGES.keys(), "checks": history_page, "check_filter":check_filter if check_filter in filters else "all",
+    return {**chart, "coverage":coverage, "approximate":bool(mixed), "period": period, "periods": RANGES.keys(), "checks": history_page, "check_filter":check_filter if check_filter in filters else "all",
             "count": count, "p99": p99, "slow_count": slow_count, "incident_count":monitor.incidents.filter(opened__gte=start, opened__lte=now).count(), "raw_count":raw_count, "rollups":list(rolled)[-48:][::-1], "mean": total_ms/count if count else None, "p95": p95, "availability": 100 * passed / count if count else None,
-            "peak": peak, "points": points, "segments": [" ".join(g) for g in segments], "start": start, "end": now}
+            "start": start, "end": now}
 
 
 @login_required
@@ -119,11 +120,21 @@ def monitoring(request):
         monitors = monitors.filter(environment=environment)
     if chosen:
         monitors = monitors.filter(group=chosen)
-    latest = Check.objects.filter(monitor_id=OuterRef("pk")).order_by("-at","-pk")
-    monitors = list_stats(monitors.annotate(last_check=Subquery(latest.values("at")[:1]), last_ms=Subquery(latest.values("ms")[:1])))
+    monitors = list_stats(latest_checks(monitors))
     states = Counter(m.state for m in monitors if not m.paused)
+    grouping = request.GET.get("by","")
+    if grouping not in ("group","environment"):
+        grouping = ""
+    severity = {"Down":0,"Slow":1,"Pending":2,"Up":3}
+    monitors.sort(key=lambda m: (getattr(m,grouping,"").casefold(), 4 if m.paused else severity.get(m.state,4),m.name.casefold(),m.pk))
+    grouped = {}
+    for m in monitors:
+        m.display_url = display_endpoint(m.url)
+        group = getattr(m,grouping,"") or ("Unassigned" if grouping else "Endpoints")
+        grouped.setdefault(group,[]).append(m)
+    open_issues = Incident.objects.filter(closed=None,monitor__in=monitors,monitor__paused=False).select_related("monitor").order_by("-opened")[:12]
     template = "console/uptime_list.html" if request.GET.get("partial") else "console/monitors.html"
-    return render(request, template, {"section":"Uptime", "monitors":monitors, "up":states["Up"], "slow":states["Slow"], "down":states["Down"], "states":state_values, "selected_state":selected_state, "q":search, "groups":groups, "group":chosen, "environments":environments,"environment":environment,"tags":tags,"tag":tag})
+    return render(request, template, {"section":"Uptime", "monitors":monitors, "grouped": grouped, "by":grouping, "active_issues":open_issues, "up":states["Up"], "slow":states["Slow"], "down":states["Down"], "states":state_values, "selected_state":selected_state, "q":search, "groups":groups, "group":chosen, "environments":environments,"environment":environment,"tags":tags,"tag":tag})
 
 
 @login_required
@@ -134,8 +145,7 @@ def monitor_detail(request, pk):
         period = "24h"
     context = measurement_context(item,period,request.GET.get("result","all"),request.GET.get("checks_page"))
     # Legacy URLs might embed query credentials; never render them in detail or status pages.
-    endpoint = urlsplit(item.url)
-    context.update(section="Uptime", monitor=item, endpoint=item.url.split("?")[0] if "{{" in item.url else f"{endpoint.scheme}://{endpoint.netloc.split('@')[-1]}{endpoint.path}",
+    context.update(section="Uptime", monitor=item, endpoint=display_endpoint(item.url),
                    maintenance=in_maintenance(item, timezone.now()), windows=Maintenance.for_monitor(item).order_by("start"),
                    maintenance_form=MaintenanceForm(), recent_incidents=Paginator(item.incidents.order_by("-opened","-pk"),10).get_page(request.GET.get("ipage")))
     template = "console/uptime_measurements.html" if request.GET.get("partial") else "console/monitor.html"
@@ -166,6 +176,21 @@ def preview_monitor(request, pk=None):
     return render(request,"console/monitor_preview.html",{"section":"Uptime", "preview":payload},status=status_code)
 
 
+@transaction.atomic
+def clone_monitor(request,monitor):
+    escalation_ids = list(monitor.escalation_channels.values_list("pk",flat=True))
+    channel_ids = list(monitor.channels.values_list("pk",flat=True))
+    monitor.pk = None
+    monitor.name = monitor.name[:112] + " (copy)"
+    monitor.public, monitor.paused = False, True
+    monitor.state, monitor.failures, monitor.next_at = "Pending", 0, timezone.now()
+    monitor.save(force_insert=True)
+    monitor.channels.set(channel_ids)
+    monitor.escalation_channels.set(escalation_ids)
+    audit(request, "Cloned monitor " + monitor.name,monitor)
+    return monitor
+
+
 @login_required
 @require_POST
 @transaction.atomic
@@ -176,34 +201,31 @@ def monitor_action(request, pk, action):
     require_permission(request, perms[action])
     monitor = get_object_or_404(Monitor, pk=pk)
     if action == "clone":
-        channel_ids = list(monitor.channels.values_list("pk",flat=True))
-        monitor.pk = None
-        monitor.name = monitor.name[:112] + " (copy)"
-        monitor.public, monitor.paused = False, True
-        monitor.state, monitor.failures, monitor.next_at = "Pending", 0, timezone.now()
-        monitor.save(force_insert=True)
-        monitor.channels.set(channel_ids)
-        audit(request, "Cloned monitor " + monitor.name)
-        return redirect("edit_monitor", pk=monitor.pk)
+        clone = clone_monitor(request,monitor)
+        return redirect("edit_monitor",pk=clone.pk)
     if action == "delete":
+        audit(request, "Deleted monitor " + monitor.name,monitor)
         monitor.delete()
-        audit(request, "Deleted monitor " + monitor.name)
         return redirect("monitors")
     Monitor.objects.filter(pk=pk).update(paused=action == "pause", next_at=timezone.now())
-    audit(request, f"{action.title()} monitor {monitor.name}")
+    audit(request, f"{action.title()} monitor {monitor.name}", monitor)
     return redirect("monitor", pk=pk)
 
 
 @login_required
 @require_http_methods(["GET","POST"])
-def maintenance(request):
-    form = SharedMaintenanceForm(request.POST if request.method == "POST" else None)
+def maintenance(request, pk=None):
+    window = get_object_or_404(Maintenance,pk=pk) if pk else None
+    if pk:
+        require_permission(request,"change_maintenance")
+    initial = {"targets":[window.monitor_id]} if window and window.monitor_id else {}
+    form = SharedMaintenanceForm(request.POST if request.method == "POST" else None, instance=window, initial=initial)
     if request.method == "POST":
-        require_permission(request, "add_maintenance")
+        require_permission(request, "change_maintenance" if pk else "add_maintenance")
         if form.is_valid():
             with transaction.atomic():
                 window = form.save_window()
-                audit(request, "Scheduled maintenance " + window.name)
+                audit(request, "Saved maintenance " + window.name, window)
             return redirect("maintenance")
     now = timezone.now()
     rows = list(Maintenance.objects.select_related("monitor").prefetch_related("targets"))
@@ -214,7 +236,7 @@ def maintenance(request):
                                -row.until.timestamp() if row.stage == "Ended" else row.occurs.timestamp(), row.pk))
     page = Paginator(rows,25).get_page(request.GET.get("page"))
     template = "console/maintenance_rows.html" if request.GET.get("partial") and request.method == "GET" else "console/maintenance.html"
-    return render(request, template, {"section":"Uptime", "form":form, "windows":page}, status=400 if form.is_bound else 200)
+    return render(request, template, {"section":"Uptime", "form":form, "editing":pk, "windows":page}, status=400 if form.is_bound else 200)
 
 
 @login_required
@@ -223,7 +245,7 @@ def remove_shared_window(request, window_pk):
     require_permission(request, "delete_maintenance")
     window = get_object_or_404(Maintenance, pk=window_pk)
     with transaction.atomic():
-        audit(request, "Removed maintenance " + (window.name or str(window.pk)))
+        audit(request, "Removed maintenance " + (window.name or str(window.pk)), window)
         window.delete()
     return redirect("maintenance")
 
@@ -238,7 +260,7 @@ def add_window(request, pk):
         window = form.save(commit=False)
         window.monitor = monitor
         window.save()
-        audit(request,"Scheduled maintenance for " + monitor.name)
+        audit(request,"Scheduled maintenance for " + monitor.name, window)
         return redirect("monitor",pk=pk)
     return render(request,"console/form.html",{"section":"Uptime","title":"Schedule maintenance", "button":"Save window","form":form},status=400)
 
@@ -248,7 +270,7 @@ def add_window(request, pk):
 def delete_window(request, pk, window_pk):
     require_permission(request, "delete_maintenance")
     window = get_object_or_404(Maintenance, pk=window_pk, monitor_id=pk)
-    audit(request,"Removed maintenance for " + window.monitor.name)
+    audit(request,"Removed maintenance for " + window.monitor.name, window)
     window.delete()
     return redirect("monitor",pk=pk)
 
@@ -274,8 +296,41 @@ def acknowledge(request,pk):
     updated = Incident.objects.filter(pk=item.pk,closed=None,acknowledged=False).update(
         acknowledged=True, acknowledged_by=request.user.get_username(), acknowledged_at=timezone.now(), next_reminder=None, next_escalation=None)
     if updated:
-        audit(request, f"Acknowledged incident {pk}")
+        audit(request, f"Acknowledged incident {pk}", item)
     return redirect("incidents")
+
+
+@login_required
+@require_POST
+def resolve(request, pk):
+    require_permission(request,"change_incident")
+    item = get_object_or_404(Incident, pk=pk)
+    with transaction.atomic():
+        changed = Incident.objects.filter(pk=pk,closed=None).update(closed=timezone.now(),resolved_by=request.user.get_username(),
+            next_reminder=None,next_escalation=None)
+        if changed:
+            audit(request,"Resolved incident",item)
+    return redirect("incidents")
+
+
+@login_required
+def incident_detail(request,pk):
+    item = get_object_or_404(Incident.objects.select_related("monitor"),pk=pk)
+    deliveries = item.alertdelivery_set.select_related("channel").order_by("-at","-pk")
+    return render(request, "console/incident_detail.html", {"section":"Incidents","item":item,
+        "deliveries":Paginator(deliveries,25).get_page(request.GET.get("page"))})
+
+
+def status_summary(monitors):
+    if any(m.state == "Down" and not m.maintenance_active for m in monitors):
+        return "Service disruption"
+    if any(m.state == "Slow" and not m.maintenance_active for m in monitors):
+        return "Degraded performance"
+    if any(m.maintenance_active for m in monitors):
+        return "Scheduled maintenance"
+    if not monitors or any(m.state == "Pending" for m in monitors):
+        return "Awaiting observations"
+    return "All services operational"
 
 
 def status(request):
@@ -286,8 +341,10 @@ def status(request):
     monitors = list_stats(Monitor.objects.filter(public=True,paused=False).order_by("group","name"))
     for monitor in monitors:
         monitor.maintenance_active = in_maintenance(monitor,timezone.now())
+    public_days(monitors,timezone.now())
+    active = Incident.objects.filter(closed=None,monitor__in=monitors).select_related("monitor").order_by("-opened")
     template = "console/status_rows.html" if request.GET.get("partial") else "console/status.html"
-    return render(request,template,{"monitors":monitors, "status_title":workspace.status_title})
+    return render(request,template,{"monitors":monitors, "active":active, "summary":status_summary(monitors), "status_title":workspace.status_title})
 
 
 @login_required
@@ -307,7 +364,7 @@ def channel_form(request,pk=None):
     form = ChannelForm(request.POST if request.method == "POST" else None,instance=channel)
     if request.method == "POST" and form.is_valid():
         channel = form.save()
-        audit(request,"Saved alert channel " + channel.name)
+        audit(request,"Saved alert channel " + channel.name, channel)
         return redirect("channels")
     return render(request,"console/channel_form.html",{"section":"Incidents","title":"Edit channel" if pk else "New channel","form":form})
 
@@ -321,11 +378,11 @@ def channel_action(request,pk,action):
     require_permission(request,perms[action])
     channel = get_object_or_404(AlertChannel,pk=pk)
     if action == "delete":
-        audit(request,"Deleted alert channel " + channel.name)
+        audit(request,"Deleted alert channel " + channel.name, channel)
         channel.delete()
     elif channel.enabled and channel.config_secret:
         AlertDelivery.objects.create(channel=channel,event="Test",state="Test")
-        audit(request,"Queued channel test for " + channel.name)
+        audit(request,"Queued channel test for " + channel.name, channel)
         messages.success(request,"Test queued. Delivery history updates when the worker sends it.")
     else:
         messages.error(request,"Enable and configure this channel before sending a test.")

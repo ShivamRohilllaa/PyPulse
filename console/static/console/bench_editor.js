@@ -68,19 +68,7 @@
       field(box, "Expected HTTP statuses", step.expected_statuses ?? step.expected_status, v => {
         delete step.expected_status; choose(step,"expected_statuses",v);
       }, {placeholder: "Use test default, or enter 200,201,204"});
-      const auth = make("details");
-      auth.append(make("summary", "Headers, parameters, auth and body"));
-      for (const [key, label] of [["headers","Headers"],["query","Query parameters"],["auth","Authentication"]]) {
-        field(auth, label + " (JSON object)", step[key] && Object.keys(step[key]).length ? JSON.stringify(step[key], null, 2) : "", (v, input) => {
-          try {
-            const parsed = v.trim() ? JSON.parse(v) : undefined;
-            if (parsed !== undefined && (!parsed || Array.isArray(parsed) || typeof parsed !== "object")) throw new Error();
-            input.setCustomValidity(""); choose(step,key,parsed);
-          } catch { input.setCustomValidity("Enter a valid JSON object or leave blank."); }
-        }, {rows:2, placeholder:"{}"});
-      }
-      field(auth, "Request body", step.body, v => choose(step,"body",v), {rows:3});
-      box.append(auth);
+      window.PyPulseRequest.mount(box,step,(key,value)=>choose(step,key,value===null ? undefined : value),{variableAuth:true});
       const extraction = make("div", undefined, "step-extract");
       extraction.append(make("b", "Extract response values"));
       const captures = Object.entries(step.extract || {}).map(([name, path]) => ({name, path}));
@@ -93,10 +81,10 @@
             choose(step, "extract", populated.length ? Object.fromEntries(populated.map(c => [c.name,c.path])) : undefined);
           };
           const n = field(row, "Variable name",capture.name,v=>{capture.name=v;check();}, {placeholder:"item_id"});
-          const p = field(row, "JSON path or header",capture.path,v=>{capture.path=v;check();}, {placeholder:"json:item.id"});
+          const p = field(row, "JSON path, header or regex",capture.path,v=>{capture.path=v;check();}, {placeholder:"json:item.id"});
           const check = () => {
             n.setCustomValidity(capture.path && !capture.name ? "Enter a variable name." : "");
-            p.setCustomValidity(capture.name && !capture.path ? "Enter json:field.path or header:Header-Name." : "");
+            p.setCustomValidity(capture.name && !capture.path ? "Enter json:field.path, header:Header-Name or regex:pattern." : "");
             change();
           };
           row.append(button("Remove extraction", () => { captures.splice(j,1);change();redrawExtract(); }));
@@ -119,7 +107,7 @@
       actions.append(up,down,remove);box.append(actions);cards.append(box);
     });
     if (focusIndex !== undefined && focus[focusIndex]) focus[focusIndex].focus();
-    add.disabled = steps.length>=12;
+    add.disabled = steps.length>=20;
   }
   function importRaw() {
     try {
@@ -132,7 +120,7 @@
     render();
   }
   const add=button("＋ Add step",()=>{
-    if (!valid || steps.length>=12) return;
+    if (!valid || steps.length>=20) return;
     steps.push({method:"GET"});sync();render(steps.length-1);
   });
   editor.append(heading,cards,add,status);

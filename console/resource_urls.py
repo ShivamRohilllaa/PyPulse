@@ -1,7 +1,7 @@
 from django.urls import path
 from . import resources
 
-urlpatterns = []
+urlpatterns = [path("networks/<int:copy_from>/duplicate/", resources.edit, {"kind":"networks"}, name="networks_copy")]
 for kind in resources.RESOURCES:
     defaults = {"kind": kind}
     urlpatterns += [

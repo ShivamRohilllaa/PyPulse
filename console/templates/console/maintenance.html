@@ -4,7 +4,7 @@
 <header class="page-head"><div><p class="eyebrow"><a href="{% url 'monitors' %}">Uptime</a></p><h1>Maintenance</h1></div>
 {% if perms.console.add_maintenance %}<a class="button primary" href="#new-window">Schedule a window</a>{% endif %}</header>
 <div data-live="uptime">{% include 'console/maintenance_rows.html' %}</div>
-{% if perms.console.add_maintenance %}<section id="new-window" class="panel fields"><h2>Schedule a window</h2>
+{% if perms.console.add_maintenance or editing %}<section id="new-window" class="panel fields"><h2>{% if editing %}Edit window{% else %}Schedule a window{% endif %}</h2>
 <form method="post">{% csrf_token %}{{ form.non_field_errors }}
 {% for field in form %}<div class="maintenance-field">{{ field.errors }}{% if field.name == "targets" %}<fieldset><legend>{{ field.label }}</legend>{{ field }}</fieldset>{% else %}{{ field.label_tag }} {{ field }}{% endif %}</div>{% endfor %}
 <button class="primary">Save window</button></form></section>{% endif %}

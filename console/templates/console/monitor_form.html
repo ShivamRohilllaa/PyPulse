@@ -1,7 +1,7 @@
 {% extends 'console/base.html' %}{% load static %}
-{% block head %}<script defer src="{% static 'console/monitor_preview.js' %}"></script>{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'console/request_composer.css' %}"><script defer src="{% static 'console/request_composer.js' %}"></script><script defer src="{% static 'console/monitor_composer.js' %}"></script><script defer src="{% static 'console/monitor_preview.js' %}"></script>{% endblock %}
 {% block content %}<p class="eyebrow"><a href="{% url 'monitors' %}">Uptime</a></p><h1>{{ title }}</h1>
-<form class="panel fields" method="post" id="monitor-editor">{% csrf_token %}{{ form.as_p }}
+<form class="panel fields" method="post" id="monitor-editor" data-saved="{% if form.instance.pk %}yes{% else %}no{% endif %}">{% csrf_token %}{{ form.as_p }}
 <div class="actions"><button class="primary">{{ button }}</button>
 <button type="submit" data-preview formtarget="_blank" formaction="{% if form.instance.pk %}{% url 'edit_monitor_preview' form.instance.pk %}{% else %}{% url 'new_monitor_preview' %}{% endif %}">Send test request</button></div>
 <p class="muted">The test sends one request using the current form. The preview times out after 5 seconds.</p>

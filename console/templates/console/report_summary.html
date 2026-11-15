@@ -1,0 +1,10 @@
+{% if summary %}<section class="panel" aria-labelledby="summary-title"><div class="panel-head"><h2 id="summary-title">Run summary</h2><a href="{% url 'summary_text' run.pk %}">Text report</a></div><p><strong>{{ summary.headline }}</strong></p>{% if summary.findings %}<ul>{% for finding in summary.findings %}<li>{{ finding }}</li>{% endfor %}</ul>{% endif %}
+{% if summary.actions %}<h3>Recommended checks</h3><ol>{% for action in summary.actions %}<li>{{ action }}</li>{% endfor %}</ol>{% endif %}
+<button type="button" data-copy-report="{% url 'summary_text' run.pk %}">Copy summary</button>
+<details><summary>How to read these measurements</summary><dl>
+<dt>p95 and p99</dt><dd>The elapsed times at the 95th and 99th percentiles of the measured HTTP responses. {% if m.p95 != None %}This run: {{ m.p95 }} ms p95 · {{ m.p99 }} ms p99.{% endif %}</dd>
+<dt>Time to first byte</dt><dd>Time between preparing the transfer and receiving its first response byte. It includes waiting across the network. {% if m.phases.ttfb != None %}Average in this run: {{ m.phases.ttfb }} ms.{% endif %}</dd>
+<dt>Throughput</dt><dd>Completed HTTP requests per second. An iteration can contain several requests. {% if m.rps != None %}This run averaged {{ m.rps }} req/s.{% endif %}</dd>
+<dt>Virtual users</dt><dd>Concurrent clients that complete one iteration before starting the next. {% if run.config.model == "users" and run.config.settings %}Configured concurrency: {{ run.config.settings.concurrency }}.{% endif %}</dd>
+<dt>Dropped iterations</dt><dd>Scheduled arrivals the generator could not start. {% if m.dropped != None %}Dropped in this run: {{ m.dropped }}.{% endif %}</dd>
+</dl></details></section>{% endif %}

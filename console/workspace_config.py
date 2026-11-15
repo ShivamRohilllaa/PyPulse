@@ -24,16 +24,16 @@ MODELS = {"profiles": NetworkProfile, "variables": Variable, "channels": AlertCh
           "monitors": Monitor, "benchmarks": Exercise, "maintenance": Maintenance}
 SECTIONS = ("settings", *MODELS)
 FIELDS = {
-    "profiles": ("name", "download_kbps", "upload_kbps", "latency_ms", "jitter_ms", "loss_pct"),
-    "variables": ("name", "environment", "secret"),
+    "profiles": ("name", "description", "download_kbps", "upload_kbps", "latency_ms", "jitter_ms", "loss_pct"),
+    "variables": ("name", "description", "environment", "secret"),
     "channels": ("name", "kind", "enabled", "escalation_only"),
-    "monitors": ("name", "group", "tags", "alert_events", "url", "method", "environment", "interval", "expected_status", "contains", "warn_ms",
+    "monitors": ("name", "group", "tags", "alert_events", "url", "method", "environment", "interval", "expected_status", "status_expression", "contains", "warn_ms",
                  "failure_threshold", "paused", "public", "timeout_ms", "reminder_minutes", "escalation_minutes"),
     "benchmarks": ("name", "url", "pattern", "rate", "seconds", "max_p95", "max_error_pct", "repeat_minutes"),
     "maintenance": ("name", "recurrence"),
 }
 EXTRAS = {"profiles": (), "variables": ("value",), "channels": ("config",),
-          "monitors": ("profile", "request", "channels", "escalation_channel"), "benchmarks": ("options",), "maintenance": ("monitor", "targets", "all_monitors", "start", "end")}
+          "monitors": ("profile", "request", "channels", "escalation_channel", "escalation_channels"), "benchmarks": ("options",), "maintenance": ("monitor", "targets", "all_monitors", "start", "end")}
 
 
 class ConfigError(ValueError):
@@ -104,7 +104,8 @@ def export_row(kind, obj, secrets):
     elif kind == "channels":
         row["config"] = (decode_secret(obj.config_secret) if secrets else MASK) if obj.config_secret else {}
     elif kind == "monitors":
-        row["channels"] = list(obj.channels.order_by("name").values_list("name", flat=True))
+        for field in ("channels", "escalation_channels"):
+            row[field] = list(getattr(obj, field).order_by("name").values_list("name", flat=True))
         row["escalation_channel"] = obj.escalation_channel.name if obj.escalation_channel_id else None
         row["profile"] = obj.network_profile.name if obj.network_profile_id else None
         row["url"] = masked_url(obj.url, secrets)
@@ -340,12 +341,13 @@ def save_row(section, row):
             obj.url = urlunsplit(parts._replace(query=""))
         data = {field: getattr(obj, field) for field in FIELDS[section]}
         data["network_profile"] = obj.network_profile_id
-        if "channels" in row:
-            if not isinstance(row["channels"], list):
-                raise ConfigError("Standard channels must be a list of names.")
-            data["channels"] = [named(AlertChannel, name).pk for name in row["channels"]]
-        elif obj.pk:
-            data["channels"] = list(obj.channels.values_list("pk", flat=True))
+        for field in ("channels", "escalation_channels"):
+            if field in row:
+                if not isinstance(row[field], list):
+                    raise ConfigError("Channels must be a list of names.")
+                data[field] = [named(AlertChannel, name).pk for name in row[field]]
+            elif obj.pk:
+                data[field] = list(getattr(obj, field).values_list("pk", flat=True))
         if "escalation_channel" in row:
             obj.escalation_channel = named(AlertChannel, row["escalation_channel"]) if row["escalation_channel"] is not None else None
         data["escalation_channel"] = obj.escalation_channel_id
@@ -435,8 +437,10 @@ def import_config(doc, mode="merge", scopes=SECTIONS):
                 if section not in MODELS:
                     continue
                 removing = MODELS[section].objects.exclude(pk__in=keep[section])
+                if section == "benchmarks" and removing.filter(run__isnull=False).exists():
+                    raise ConfigError("A removed benchmark has run history. Keep it in this import or remove it explicitly.")
                 if section == "channels" and (Monitor.objects.filter(channels__in=removing).exists() or
-                                               Monitor.objects.filter(escalation_channel__in=removing).exists()):
+                                               Monitor.objects.filter(Q(escalation_channel__in=removing) | Q(escalation_channels__in=removing)).exists()):
                     raise ConfigError("A removed channel is still used by a monitor.")
                 if section == "profiles":
                     removing = removing.filter(preset=False)

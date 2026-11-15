@@ -32,7 +32,7 @@ INSTALLED_APPS = ["django.contrib.auth", "django.contrib.contenttypes", "django.
 MIDDLEWARE = ["django.middleware.security.SecurityMiddleware","whitenoise.middleware.WhiteNoiseMiddleware","django.contrib.sessions.middleware.SessionMiddleware",
               "django.middleware.common.CommonMiddleware","django.middleware.csrf.CsrfViewMiddleware",
               "django.contrib.auth.middleware.AuthenticationMiddleware","django.contrib.messages.middleware.MessageMiddleware",
-              "django.middleware.clickjacking.XFrameOptionsMiddleware"]
+              "django.middleware.clickjacking.XFrameOptionsMiddleware","console.workspace_auth.LoginThrottleMiddleware"]
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3","NAME": DATA / "pypulse.sqlite3",
                          "OPTIONS": {"timeout": 20,"transaction_mode":"IMMEDIATE","init_command":"PRAGMA journal_mode=WAL;"}}}
 TEMPLATES = [{"BACKEND":"django.template.backends.django.DjangoTemplates","APP_DIRS":True,
@@ -43,6 +43,7 @@ WSGI_APPLICATION = "pulse.wsgi.application"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 TIME_ZONE = "UTC"
+SESSION_COOKIE_AGE = int(os.environ.get("PYPULSE_SESSION_HOURS", "168")) * 3600
 LOGIN_URL = "/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/login/"

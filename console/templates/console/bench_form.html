@@ -1,6 +1,8 @@
 {% extends 'console/base.html' %}{% load static %}{% block content %}
+<link rel="stylesheet" href="{% static 'console/request_composer.css' %}"><script defer src="{% static 'console/request_composer.js' %}"></script>
 <link rel="stylesheet" href="{% static 'console/bench_editor.css' %}"><script defer src="{% static 'console/bench_editor.js' %}"></script>
 <header class="page-head"><div><p class="eyebrow">Performance lab</p><h1>{{ title }}</h1><p class="muted">Choose a target, then define the traffic it should handle.</p></div><a href="{% url 'benchmarks' %}">All benchmarks</a></header>
+{% if preview %}{% include "console/preflight.html" %}{% endif %}
 <form method="post" enctype="multipart/form-data" class="fields">{% csrf_token %}{{ form.non_field_errors }}
 {% for group in form.groups %}<section class="panel"><details {% if group.open or form.errors %}open{% endif %}><summary><b>{{ group.title }}</b></summary><p class="muted">{{ group.description }}</p>
 {% for field in group.fields %}<p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<small class="muted">{{ field.help_text }}</small>{% endif %}</p>{% endfor %}
@@ -9,4 +11,4 @@
    "extract":{"item":"json:item.id"}},
   {"name":"Get item","url":"http://127.0.0.1:8000/items/{{item}}"}
 ]{% endverbatim %}</pre><p>Use a CSV headed <code>order</code>, with one order ID per line.</p></details>{% endif %}</details></section>{% endfor %}
-<button class="primary">{{ button }} benchmark</button></form>{% endblock %}
+<div class="actions"><button class="primary" name="action" value="save">Save benchmark</button><button name="action" value="preview">Preview workload</button>{% if perms.console.add_run %}<button name="action" value="once" data-confirm="Start a one-off run with these settings?">Run once</button>{% endif %}{% if existing and perms.console.add_exercise %}<button name="action" value="copy">Save as a new test</button>{% endif %}</div></form>{% endblock %}

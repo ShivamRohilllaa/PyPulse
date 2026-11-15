@@ -2,7 +2,7 @@
 
 **See which Python routes are slow, which ones fail, and how many queries each Django request costs.** PyPulse is a self-hosted Django application with a Python collector, scheduler and HTTP benchmark worker. Monitor endpoint health, replay multi-step API journeys under load, and send alerts from the same self-hosted workspace.
 
-[Explore the product site ↗](https://shivamrohilllaa.github.io/PyPulse/) · [Start here](#start-the-dashboard) · [Choose your framework](#connect-your-framework) · [Try the Django experiment](#try-the-django-experiment) · [Dashboard guide](docs/dashboard-guide.md)
+[Explore the product site ↗](https://shivamrohilllaa.github.io/PyPulse/) · [Start here](#start-the-dashboard) · [Choose your framework](#connect-your-framework) · [Try the Django experiment](#try-the-django-experiment) · [Dashboard guide](docs/dashboard-guide.md) · [Feature comparison](docs/feature-comparison.md)
 
 [![Live Python route report with 30 requests, 3 errors and 90% availability](docs/screenshots/traffic.jpg)](docs/screenshots/traffic.jpg)
 
@@ -18,7 +18,7 @@ docker compose up -d --build
 docker compose exec web python manage.py createsuperuser
 ```
 
-Open **http://localhost:8080** and sign in. **Connect service** creates a token for one Python application. Compose starts the web process and a separate worker for uptime checks and benchmarks. The named volume stores SQLite and the Django signing key.
+The [public landing page](https://shivamrohilllaa.github.io/PyPulse/) has the product tour. Open [your local dashboard](http://127.0.0.1:8080/) and sign in to see **Traffic** directly. **Connect service** creates a token for one Python application. Compose starts the web process and a separate worker for uptime checks and benchmarks. The named volume stores SQLite and the Django signing key.
 
 </details>
 <details>
@@ -30,13 +30,23 @@ Use Python 3.11 or later for the dashboard. From the repository root:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-python manage.py migrate
-python manage.py collectstatic --noinput
-python manage.py createsuperuser
-python manage.py runserver 127.0.0.1:8080 --noreload
+python -m pulse.launch
 ```
 
-In a second terminal, run `.venv/bin/python manage.py pulseworker`. For a deployed instance, use the supplied Gunicorn entry point behind an HTTPS proxy. [Deployment settings](docs/dashboard-guide.md#deploy-and-back-up)
+The launcher prepares SQLite and starts both the ASGI dashboard and its worker. Open [the dashboard](http://127.0.0.1:8080/) and create your first administrator from the local sign-in screen. A single command stops both processes with Ctrl+C. [First-run and deployment settings](docs/workspace.md)
+
+</details>
+<details>
+<summary><strong>Standalone Docker image</strong></summary>
+
+```sh
+docker build -t pypulse .
+docker run -d --name pypulse -p 127.0.0.1:8080:8080 -v pypulse-data:/app/data pypulse
+curl -fsS --retry 15 --retry-all-errors http://127.0.0.1:8080/healthz
+docker exec -it pypulse python manage.py createsuperuser
+```
+
+Open [the dashboard](http://127.0.0.1:8080/). The image runs the web server and one scheduler, and the named volume survives container replacement.
 
 </details>
 

@@ -2,6 +2,8 @@
 
 ## Traffic
 
+Open the application root to go directly to **Traffic**. The public product tour lives on [GitHub Pages](https://shivamrohilllaa.github.io/PyPulse/).
+
 Sign in and choose **Connect service**, then set its token in the Python workers. Select a time window on **Traffic** to inspect counts and p95 by method and route. Availability measures responses without HTTP 5xx. At a target of 99.9%, one error uses the allowance for 1,000 requests. **Agent configuration → Rotate token** issues a replacement. Update all instances when rotating it. The default telemetry retention is seven days. Workspace administrators can adjust it. [Framework setup](../README.md#connect-your-framework)
 
 ## Uptime, incidents and notifications
@@ -15,7 +17,8 @@ Use **Incidents → Alert channels** for Slack, Teams, SMTP email or signed webh
 1. Add the host you operate under **Workspace → Workspace settings → Benchmark targets**, or set `PYPULSE_TEST_HOSTS`. A same-host install includes `127.0.0.1:8000`. In Compose, use the demo service’s hostname on a shared network.
 2. Try **Benchmarks → New benchmark** with the local order lookup. Choose **Fixed**, 10 iterations per second, one request per iteration and 30 seconds. Save and choose **Run**. Follow throughput, tail latency, HTTP status codes, errors and drops.
 3. Select **Latency** and two network profiles to compare transport timing. Configure a multi-step journey with CSV inputs and extract an ID or header from the first response for use in the next request.
-4. Download samples from the report. **Compare two runs** shows how throughput, p95 and errors changed. Set pass thresholds and schedule saved tests by interval or time of day. [Benchmark setup, patterns and limits](benchmarks.md)
+4. **Preview workload** shows hosts and estimated requests. **Run once** measures a draft without creating a schedule. Open **Run summary** for measured findings, suggested checks and a copyable text report.
+5. Download samples from the report. **Compare two runs** shows how throughput, p95 and errors changed. Set pass thresholds and schedule saved tests by interval or time of day. [Benchmark setup, patterns and limits](benchmarks.md)
 
 ## Network profiles and variables
 

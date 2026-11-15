@@ -1,6 +1,6 @@
-{% extends 'console/base.html' %}{% block content %}
+{% extends 'console/base.html' %}{% load static %}{% block head %}<link rel="stylesheet" href="{% static 'console/request_composer.css' %}"><script defer src="{% static 'console/request_composer.js' %}"></script><script defer src="{% static 'console/channel_composer.js' %}"></script>{% endblock %}{% block content %}
 <p class="eyebrow"><a href="{% url 'channels' %}">Alert channels</a></p><h1>{{ title }}</h1>
-<form class="panel fields" method="post">{% csrf_token %}{{ form.as_p }}<details><summary>Configuration examples</summary>
+<form class="panel fields" method="post" data-saved="{% if form.instance.pk %}yes{% else %}no{% endif %}">{% csrf_token %}{{ form.as_p }}<details><summary>Configuration examples</summary>
 <p>Signed webhook</p><code>{"url":"https://alerts.example.com/hook","secret":"your-signing-key"}</code>
 <p>Slack or Teams webhook</p><code>{"url":"https://your-provider.example.com/webhook"}</code>
 <p>SMTP</p><code>{"host":"smtp.example.com","port":587,"security":"starttls","from":"alerts@example.com","to":["oncall@example.com"],"username":"alerts","password":"your-password"}</code></details>

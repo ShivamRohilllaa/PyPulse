@@ -7,13 +7,14 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from .models import Audit, NetworkProfile, Variable
+from .audit import record
+from .models import NetworkProfile, Variable
 
 
 class NetworkForm(forms.ModelForm):
     class Meta:
         model = NetworkProfile
-        fields = ("name", "download_kbps", "upload_kbps", "latency_ms", "jitter_ms", "loss_pct")
+        fields = ("name", "description", "download_kbps", "upload_kbps", "latency_ms", "jitter_ms", "loss_pct")
         labels = {"download_kbps": "Download (kbit/s)", "upload_kbps": "Upload (kbit/s)",
                   "latency_ms": "Added latency (ms)", "jitter_ms": "Latency variation (±ms)",
                   "loss_pct": "Requests to drop (%)"}
@@ -25,7 +26,7 @@ class VariableForm(forms.ModelForm):
 
     class Meta:
         model = Variable
-        fields = ("name", "environment", "secret")
+        fields = ("name", "description", "environment", "secret")
         labels = {"secret": "Mask this value in the dashboard"}
         help_texts = {"name": "Use {{NAME}} in a request.", "environment": "Leave blank to use across environments."}
 
@@ -62,7 +63,6 @@ def authorize(request, model, operation):
 @never_cache
 def listing(request, kind):
     model, _, title, singular = RESOURCES[kind]
-    authorize(request, model, "view")
     rows = model.objects.order_by("name", "environment" if kind == "variables" else "pk")
     if kind == "variables":
         rows = [{"item": v, "display": "••••••••" if v.secret else v.reveal()} for v in rows]
@@ -74,19 +74,24 @@ def listing(request, kind):
 @login_required
 @require_http_methods(["GET", "POST"])
 @never_cache
-def edit(request, kind, pk=None):
+def edit(request, kind, pk=None, copy_from=None):
     model, form_type, section, singular = RESOURCES[kind]
     authorize(request, model, "change" if pk else "add")
     item = get_object_or_404(model, pk=pk) if pk else None
     if getattr(item, "preset", False):
         raise PermissionDenied
-    form = form_type(request.POST if request.method == "POST" else None, instance=item)
+    initial = {}
+    if copy_from:
+        origin = get_object_or_404(NetworkProfile, pk=copy_from)
+        initial = {key: getattr(origin, key) for key in NetworkForm.Meta.fields}
+        initial["name"] = origin.name[:71] + " (custom)"
+    form = form_type(request.POST if request.method == "POST" else None, instance=item, initial=initial)
     if pk and kind == "variables":
         form.fields["value"].help_text = "Leave blank to keep the current value."
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
             item = form.save()
-            Audit.objects.create(actor=request.user.get_username(), action=f"Saved {singular} {item.name}")
+            record(request, f"Saved {singular}", item)
         messages.success(request, f"Saved {item.name}.")
         return redirect(kind)
     return render(request, "console/form.html", {"form": form, "section": section,
@@ -102,6 +107,20 @@ def remove(request, kind, pk):
         item = get_object_or_404(model, pk=pk)
         if getattr(item, "preset", False):
             raise PermissionDenied
-        Audit.objects.create(actor=request.user.get_username(), action=f"Removed {singular} {item.name}")
-        item.delete()
+        try:
+            remove_resource(request, item)
+        except ValueError as error:
+            messages.error(request, str(error))
     return redirect(kind)
+
+
+def remove_resource(request, item):
+    if isinstance(item, NetworkProfile):
+        from .models import Exercise
+        if item.preset:
+            raise ValueError("Built-in profiles are read-only.")
+        in_tests = any(item.pk in options.get("profiles", []) for options in Exercise.objects.values_list("options", flat=True))
+        if item.monitor_set.exists() or in_tests:
+            raise ValueError("Remove this profile from its monitors and benchmarks before deleting it.")
+    record(request, "Removed workspace resource", item)
+    item.delete()

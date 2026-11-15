@@ -5,6 +5,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator, RegexVa
 
 
 class NetworkProfile(models.Model):
+    description = models.CharField(max_length=240, blank=True)
     name = models.CharField(max_length=80, unique=True)
     download_kbps = models.PositiveIntegerField(default=0, help_text="0 for unlimited")
     upload_kbps = models.PositiveIntegerField(default=0, help_text="0 for unlimited")
@@ -22,6 +23,7 @@ class NetworkProfile(models.Model):
 
 
 class Variable(models.Model):
+    description = models.CharField(max_length=240, blank=True)
     name = models.CharField(max_length=80, validators=[RegexValidator(r"^[A-Za-z_][A-Za-z0-9_]*$")])
     environment = models.CharField(max_length=80, blank=True)
     secret = models.BooleanField(default=True)
@@ -76,6 +78,8 @@ class Slice(models.Model):
 
 
 class Monitor(models.Model):
+    status_expression = models.CharField(max_length=160, blank=True)
+    escalation_channels = models.ManyToManyField("AlertChannel", blank=True, related_name="escalation_targets")
     tags = models.CharField(max_length=240, blank=True)
     alert_events = models.JSONField(default=list, blank=True)
     channels = models.ManyToManyField("AlertChannel", blank=True, related_name="monitors")
@@ -116,6 +120,7 @@ class Check(models.Model):
 
 
 class CheckHour(models.Model):
+    latency_histogram = models.JSONField(default=dict, blank=True)
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="hours")
     hour = models.DateTimeField(db_index=True)
     total = models.PositiveIntegerField()
@@ -130,6 +135,10 @@ class CheckHour(models.Model):
 
 
 class Incident(models.Model):
+    kind = models.CharField(max_length=16, default="Down")
+    reason = models.CharField(max_length=100, blank=True)
+    resolved_by = models.CharField(max_length=150, blank=True)
+    suppressed = models.BooleanField(default=False)
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="incidents")
     opened = models.DateTimeField(default=timezone.now)
     closed = models.DateTimeField(null=True)
@@ -161,7 +170,15 @@ class Exercise(models.Model):
 
 
 class Run(models.Model):
-    exercise = models.ForeignKey(Exercise, on_delete=models.PROTECT)
+    exercise = models.ForeignKey(Exercise, null=True, blank=True, on_delete=models.SET_NULL)
+    name = models.CharField(max_length=120, blank=True)
+    trigger = models.CharField(max_length=12, default="unknown")
+    actor = models.CharField(max_length=150, blank=True)
+
+    @property
+    def display_name(self):
+        return self.name or (self.exercise.name if self.exercise_id else f"Run #{self.pk}")
+
     config = models.JSONField(default=dict)
     started = models.DateTimeField(default=timezone.now)
     finished = models.DateTimeField(null=True)
@@ -213,6 +230,9 @@ class Maintenance(models.Model):
 
 
 class Audit(models.Model):
+    object_type = models.CharField(max_length=60, blank=True)
+    object_id = models.CharField(max_length=60, blank=True)
+    details = models.JSONField(default=dict, blank=True)
     at = models.DateTimeField(default=timezone.now, db_index=True)
     actor = models.CharField(max_length=150)
     action = models.CharField(max_length=200)
@@ -249,3 +269,9 @@ class ApiToken(models.Model):
     created = models.DateTimeField(default=timezone.now)
     last_used = models.DateTimeField(null=True, editable=False)
     revoked = models.DateTimeField(null=True, editable=False)
+
+
+class LoginThrottle(models.Model):
+    key = models.CharField(max_length=64, primary_key=True)
+    since = models.DateTimeField(default=timezone.now, db_index=True)
+    failures = models.PositiveSmallIntegerField(default=0)
