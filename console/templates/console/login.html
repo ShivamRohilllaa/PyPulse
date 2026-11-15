@@ -1,0 +1,1 @@
+{% extends 'console/base.html' %}{% block content %}<section class="login panel"><p class="eyebrow">Workspace access</p><h1>Sign in</h1><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary">Open workspace</button></form></section>{% endblock %}

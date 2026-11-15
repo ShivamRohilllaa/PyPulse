@@ -1,0 +1,1 @@
+{% extends 'console/base.html' %}{% block content %}<p class="eyebrow">Public status</p><h1>Service availability</h1><section class="panel"><table><tr><th>Service</th><th>Status</th></tr>{% for m in monitors %}<tr><td>{{ m.name }}</td><td>{{ m.state }}</td></tr>{% empty %}<tr><td colspan="2">No public monitors.</td></tr>{% endfor %}</table></section>{% endblock %}

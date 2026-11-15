@@ -1,0 +1,27 @@
+services:
+  setup:
+    build: .
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput"
+    volumes: [pulse-data:/app/data]
+  web:
+    build: .
+    depends_on:
+      setup: {condition: service_completed_successfully}
+    ports: ["127.0.0.1:8080:8080"]
+    env_file:
+      - path: .env
+        required: false
+    volumes: [pulse-data:/app/data]
+    restart: unless-stopped
+  worker:
+    build: .
+    depends_on:
+      setup: {condition: service_completed_successfully}
+    command: python manage.py pulseworker
+    env_file:
+      - path: .env
+        required: false
+    volumes: [pulse-data:/app/data]
+    restart: unless-stopped
+volumes:
+  pulse-data:
