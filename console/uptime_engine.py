@@ -89,21 +89,28 @@ def notify(monitor, state, event=None, incident=None, now=None):
     AlertDelivery.objects.bulk_create(rows)
 
 
-def check_monitor(pk):
-    monitor = Monitor.objects.select_related("network_profile").filter(pk=pk, paused=False).first()
-    if monitor is None:
-        return
+def measure_monitor(monitor, *, timeout_ms=None):
+    """Evaluate the request without recording or exposing its contents."""
     try:
         opts = request_options(monitor)
         request = {key: opts[key] for key in ("headers", "query", "body", "auth") if key in opts}
         request.update(url=monitor.url, method=monitor.method)
         variables = probes.workspace_variables(monitor.environment)
         profile = monitor.network_profile.snapshot() if monitor.network_profile else None
-        result = probes.probe(request, variables, profile, timeout_ms=monitor.timeout_ms)
+        result = probes.probe(request, variables, profile, timeout_ms=timeout_ms if timeout_ms is not None else monitor.timeout_ms)
         reason = verdict(monitor, opts, result)
     except Exception:
         # Invalid stored configuration and transport failures must not reveal request secrets.
         result, reason = {"ms": 0, "status": 0}, "Check configuration failed"
+    return {"ms": result["ms"], "status": result["status"] or None, "reason": reason}
+
+
+def check_monitor(pk):
+    monitor = Monitor.objects.select_related("network_profile").filter(pk=pk, paused=False).first()
+    if monitor is None:
+        return
+    result = measure_monitor(monitor)
+    reason = result["reason"]
     now = timezone.now()
     with transaction.atomic():
         monitor = Monitor.objects.select_for_update().filter(pk=pk, paused=False).first()

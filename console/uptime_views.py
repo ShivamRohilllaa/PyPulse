@@ -8,17 +8,18 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Case, Count, F, FilteredRelation, Q, Sum, Value, When
+from django.db.models import Case, Count, F, FilteredRelation, OuterRef, Q, Subquery, Sum, Value, When
 from django.db.models.functions import StrIndex, Substr, TruncDay, TruncHour, TruncMinute
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_http_methods, require_POST
 
-from .models import AlertChannel, AlertDelivery, Audit, Incident, Maintenance, Monitor
-from .uptime_engine import in_maintenance, occurrence
-from .uptime_forms import ChannelForm, MaintenanceForm, SharedMaintenanceForm
+from .models import AlertChannel, AlertDelivery, Audit, Check, Incident, Maintenance, Monitor
+from .uptime_engine import in_maintenance, measure_monitor, occurrence
+from .uptime_forms import ChannelForm, MaintenanceForm, MonitorForm, SharedMaintenanceForm
 
 
 def require_permission(request, code):
@@ -44,7 +45,7 @@ RANGES = {"1h": (1, TruncMinute, 60), "24h": (24, TruncHour, 3600),
           "7d": (168, TruncHour, 3600), "30d": (720, TruncDay, 86400), "90d": (2160, TruncDay, 86400)}
 
 
-def measurement_context(monitor, period):
+def measurement_context(monitor, period, check_filter="all", page=None):
     hours, trunc, width = RANGES[period]
     now = timezone.now()
     start = now - timedelta(hours=hours)
@@ -87,7 +88,10 @@ def measurement_context(monitor, period):
         segments[-1].append(f"{x},{y}")
         points.append((x, y))
         previous = bucket
-    return {"period": period, "periods": RANGES.keys(), "checks": checks.order_by("-at","-id")[:80],
+    filters = {"failed": Q(ok=False), "slow": Q(slow=True), "issues": Q(ok=False) | Q(slow=True)}
+    history = checks.filter(filters[check_filter]) if check_filter in filters else checks
+    history_page = Paginator(history.order_by("-at","-pk"), 25).get_page(page)
+    return {"period": period, "periods": RANGES.keys(), "checks": history_page, "check_filter":check_filter if check_filter in filters else "all",
             "count": count, "p99": p99, "slow_count": slow_count, "incident_count":monitor.incidents.filter(opened__gte=start, opened__lte=now).count(), "raw_count":raw_count, "rollups":list(rolled)[-48:][::-1], "mean": total_ms/count if count else None, "p95": p95, "availability": 100 * passed / count if count else None,
             "peak": peak, "points": points, "segments": [" ".join(g) for g in segments], "start": start, "end": now}
 
@@ -115,7 +119,8 @@ def monitoring(request):
         monitors = monitors.filter(environment=environment)
     if chosen:
         monitors = monitors.filter(group=chosen)
-    monitors = list_stats(monitors)
+    latest = Check.objects.filter(monitor_id=OuterRef("pk")).order_by("-at","-pk")
+    monitors = list_stats(monitors.annotate(last_check=Subquery(latest.values("at")[:1]), last_ms=Subquery(latest.values("ms")[:1])))
     states = Counter(m.state for m in monitors if not m.paused)
     template = "console/uptime_list.html" if request.GET.get("partial") else "console/monitors.html"
     return render(request, template, {"section":"Uptime", "monitors":monitors, "up":states["Up"], "slow":states["Slow"], "down":states["Down"], "states":state_values, "selected_state":selected_state, "q":search, "groups":groups, "group":chosen, "environments":environments,"environment":environment,"tags":tags,"tag":tag})
@@ -127,7 +132,7 @@ def monitor_detail(request, pk):
     period = request.GET.get("range","24h")
     if period not in RANGES:
         period = "24h"
-    context = measurement_context(item,period)
+    context = measurement_context(item,period,request.GET.get("result","all"),request.GET.get("checks_page"))
     # Legacy URLs might embed query credentials; never render them in detail or status pages.
     endpoint = urlsplit(item.url)
     context.update(section="Uptime", monitor=item, endpoint=item.url.split("?")[0] if "{{" in item.url else f"{endpoint.scheme}://{endpoint.netloc.split('@')[-1]}{endpoint.path}",
@@ -135,6 +140,30 @@ def monitor_detail(request, pk):
                    maintenance_form=MaintenanceForm(), recent_incidents=Paginator(item.incidents.order_by("-opened","-pk"),10).get_page(request.GET.get("ipage")))
     template = "console/uptime_measurements.html" if request.GET.get("partial") else "console/monitor.html"
     return render(request,template,context)
+
+
+@login_required
+@require_POST
+@csrf_protect
+@never_cache
+def preview_monitor(request, pk=None):
+    require_permission(request,"change_monitor" if pk else "add_monitor")
+    item = get_object_or_404(Monitor,pk=pk) if pk else None
+    form = MonitorForm(request.POST,instance=item)
+    if form.is_valid():
+        candidate = form.save(commit=False)
+        result = measure_monitor(candidate, timeout_ms=min(5000, candidate.timeout_ms))
+        slow = candidate.warn_ms and result["ms"] > candidate.warn_ms
+        payload = {"result":result["reason"] or ("Slow" if slow else "Passed"),
+                   "http":result["status"], "ms":round(result["ms"],1)}
+        status_code = 200
+    else:
+        labels = [form.fields[field].label or field.replace("_"," ") for field in form.errors if field in form.fields]
+        payload = {"result":"Review " + ", ".join(labels or ["monitor settings"]), "http":None, "ms":None}
+        status_code = 400
+    if request.headers.get("Accept") == "application/json":
+        return JsonResponse(payload,status=status_code)
+    return render(request,"console/monitor_preview.html",{"section":"Uptime", "preview":payload},status=status_code)
 
 
 @login_required

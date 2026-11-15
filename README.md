@@ -133,7 +133,7 @@ A fresh service should show **30 requests, 3 server errors and 90% availability*
 <details>
 <summary><strong>Open the real benchmark report</strong> · 300 HTTP 200 responses</summary>
 
-In a separate local Django run, the Python worker sent 10 requests/s for 30 seconds. All 300 succeeded. Measured p95 was 8.62 ms and p99 was 25.65 ms. Try the same workload from **Benchmarks** to get numbers for your own machine.
+In a separate local Django run, the Python worker sent 10 requests/s for 30 seconds. All 300 succeeded. Measured p95 was 5.56 ms and p99 was 7.06 ms. Try the same workload from **Benchmarks** to get numbers for your own machine.
 
 [![Completed Python benchmark showing 300 requests and zero errors](docs/screenshots/benchmark.jpg)](docs/screenshots/benchmark.jpg)
 

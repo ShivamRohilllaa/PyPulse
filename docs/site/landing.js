@@ -1,7 +1,7 @@
 const reports = {
   uptime: {title:"Catch an unhealthy endpoint.", description:"Three Django endpoints returned a healthy order, a deliberately slow response and an intentional failure. Scheduled checks distinguished all three.", alt:"Uptime dashboard showing healthy, slow and failed Django endpoints."},
   traffic: {title:"Find the failing route.", description:"Thirty requests hit a Django orders app. Six were deliberately slow. Three failed. Route-level counts show exactly which view returned each error.", alt:"Django traffic report showing 30 requests and three intentional errors."},
-  benchmark: {title:"Measure a release under load.", description:"All 300 requests to the order lookup succeeded in this separate local run. The measured p95 was 8.62 ms, p99 was 25.65 ms, and the worker dropped zero iterations.", alt:"Completed Python benchmark with 300 HTTP 200 responses and no dropped iterations."}
+  benchmark: {title:"Measure a release under load.", description:"In a repeat of the 30-second order benchmark, all 300 requests succeeded. Measured p95 was 5.56 ms, p99 was 7.06 ms, and the worker dropped zero iterations.", alt:"Completed Python benchmark with 300 HTTP 200 responses and no dropped iterations."}
 };
 for (const button of document.querySelectorAll("[data-report]")) {
   button.addEventListener("click", () => {

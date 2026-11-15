@@ -3,6 +3,8 @@ from django.urls import path
 from . import uptime_views as v
 
 urlpatterns = [
+    path("uptime/new/preview/", v.preview_monitor, name="new_monitor_preview"),
+    path("uptime/<int:pk>/preview/", v.preview_monitor, name="edit_monitor_preview"),
     path("maintenance/", v.maintenance, name="maintenance"),
     path("maintenance/<int:window_pk>/delete/", v.remove_shared_window, name="remove_shared_window"),
     path("uptime/<int:pk>/actions/<str:action>/", v.monitor_action, name="monitor_action"),

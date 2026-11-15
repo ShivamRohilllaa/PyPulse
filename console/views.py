@@ -118,7 +118,7 @@ def configure(request,kind,pk=None,pattern=None):
             log_action(request,"Saved "+kind+" "+obj.name)
         return redirect("benchmarks" if kind=="test" else "monitors")
     title=("Edit " if pk else "New ")+("benchmark" if kind=="test" else "monitor")
-    template="console/bench_form.html" if kind=="test" else "console/form.html"
+    template="console/bench_form.html" if kind=="test" else "console/monitor_form.html"
     return render(request,template,{"title":title,"section":section,"form":form,"button":"Save"})
 
 @login_required

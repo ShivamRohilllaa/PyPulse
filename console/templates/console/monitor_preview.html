@@ -1,0 +1,3 @@
+{% extends 'console/base.html' %}{% block content %}
+<p class="eyebrow">Uptime</p><h1>Request preview</h1>
+<section class="panel"><h2>{{ preview.result }}</h2><p>{% if preview.http %}HTTP {{ preview.http }}{% endif %}{% if preview.ms != None %} · {{ preview.ms }} ms{% endif %}</p></section>{% endblock %}

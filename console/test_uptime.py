@@ -261,3 +261,66 @@ class UptimeTests(TestCase):
         self.assertEqual(self.client.post(location,{**data,"targets":[a.pk]}).status_code,403)
         self.assertEqual(self.client.post(reverse("remove_shared_window",args=[shared.pk])).status_code,403)
         self.assertEqual(Maintenance.objects.count(),1)
+
+    def test_preview_is_bounded_authorized_and_does_not_record(self):
+        client=Client(enforce_csrf_checks=True)
+        client.force_login(self.owner)
+        data=self.monitor_data(options=json.dumps({"auth":{"type":"bearer","token":"secret-input"}}),timeout_ms=60000)
+        m=Monitor.objects.create(name="Saved",url="https://example.org",state="Down",failures=3)
+        endpoint=reverse("edit_monitor_preview",args=[m.pk])
+        with patch("console.uptime_engine.probes.probe", return_value={
+                "status":200,"error":"","ms":42.5,"headers":{"Set-Cookie":"secret-output"},"body":b"secret-response"}) as probe:
+            self.assertEqual(client.post(endpoint,data).status_code,403)
+            self.assertEqual(client.get(endpoint).status_code,405)
+            client.get(reverse("edit_monitor",args=[m.pk]))
+            data["csrfmiddlewaretoken"]=client.cookies["csrftoken"].value
+            response=client.post(endpoint,data,HTTP_ACCEPT="application/json")
+            self.assertEqual(response.json(),{"result":"Passed","http":200,"ms":42.5})
+            self.assertEqual(probe.call_args.kwargs["timeout_ms"],5000)
+            self.assertEqual(probe.call_args.args[0]["auth"]["token"],"secret-input")
+            self.assertNotIn(b"secret",response.content)
+            data["url"]="invalid URL"
+            self.assertEqual(client.post(endpoint,data,HTTP_ACCEPT="application/json").status_code,400)
+            client.force_login(self.reader)
+            self.assertEqual(client.post(endpoint,data).status_code,403)
+            self.assertEqual(client.post(reverse("new_monitor_preview"),data).status_code,403)
+            probe.assert_called_once()
+        m.refresh_from_db()
+        self.assertEqual((m.name,m.failures,m.state),("Saved",3,"Down"))
+        self.assertFalse(Check.objects.exists())
+        self.assertFalse(Incident.objects.exists())
+        self.assertFalse(AlertDelivery.objects.exists())
+        self.assertEqual(Monitor.objects.count(),1)
+
+    def test_failed_slow_pagination_and_latest_measurement(self):
+        m=Monitor.objects.create(name="Orders",url="https://example.org")
+        now=timezone.now()
+        Check.objects.bulk_create([Check(monitor=m,at=now-timedelta(minutes=i+1),ms=i+1,ok=i%2==0,
+                                   slow=i%4==0,status=200 if i%2==0 else 503) for i in range(60)])
+        latest=Check.objects.create(monitor=m,at=now,ms=437,ok=True,status=200)
+        listing=self.client.get(reverse("monitors"))
+        self.assertEqual(listing.context["monitors"][0].last_check,latest.at)
+        self.assertContains(listing,"437.0 ms")
+        for scope,n in (("failed",30),("slow",15),("issues",45)):
+            response=self.client.get(reverse("monitor",args=[m.pk]),{"result":scope,"checks_page":2})
+            page=response.context["checks"]
+            self.assertEqual(page.paginator.count,n)
+            self.assertEqual(page.number,min(2,page.paginator.num_pages))
+            self.assertEqual(response.context["count"],61)
+            if scope=="failed":
+                self.assertTrue(all(not item.ok for item in page))
+                self.assertContains(response,"Newer checks")
+
+    def test_unsaved_monitor_preview_reports_assertion_without_persisting(self):
+        form=self.client.get(reverse("new_monitor"))
+        self.assertContains(form,reverse("new_monitor_preview"))
+        options={"json_equals":{"ready":True}}
+        data=self.monitor_data(options=json.dumps(options),timeout_ms=600)
+        response_data={"status":200,"error":"","ms":10,"body":b'{"ready":false,"private":"sensitive"}',"headers":{}}
+        with patch("console.uptime_engine.probes.probe",return_value=response_data) as probe:
+            response=self.client.post(reverse("new_monitor_preview"),data)
+            self.assertContains(response,"JSON value mismatch")
+            self.assertNotContains(response,"sensitive")
+            self.assertEqual(probe.call_args.kwargs["timeout_ms"],600)
+        self.assertFalse(Monitor.objects.exists())
+        self.assertFalse(Check.objects.exists())
